@@ -15,6 +15,7 @@ pub mod list;
 pub mod merge;
 pub mod open;
 pub mod path;
+pub mod reap_agents;
 pub mod remove;
 pub mod rename;
 pub mod resurrect;

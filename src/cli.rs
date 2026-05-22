@@ -283,6 +283,7 @@ Agent interaction:
   capture      Capture terminal output from a running agent
   wait         Wait for agents to reach a target status
   run          Run a command in a worktree's window
+  reap-agents  Exit tracked agent panes older than a configured age
 
 Help and updates:
   docs         Show detailed documentation (renders README.md)
@@ -633,6 +634,18 @@ enum Commands {
         /// Maximum wait time in seconds
         #[arg(long)]
         timeout: Option<u64>,
+    },
+
+    /// Exit tracked agent panes older than a configured age
+    #[command(name = "reap-agents")]
+    ReapAgents {
+        /// Age threshold in hours
+        #[arg(long, default_value = "24", value_parser = clap::value_parser!(u64).range(1..))]
+        hours: u64,
+
+        /// Actually exit matching agents instead of showing what would happen
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Re-apply file operations (copy/symlink) to worktrees
@@ -1057,6 +1070,9 @@ pub fn run() -> Result<()> {
             keep,
             timeout,
         } => command::run::run(&name, command, background, keep, timeout),
+        Commands::ReapAgents { hours, force } => {
+            command::reap_agents::run(hours.saturating_mul(3600), force)
+        }
         Commands::Exec { run_dir } => command::exec::run(&run_dir),
         Commands::SyncFiles { all } => command::sync_files::run(all),
         Commands::Init => crate::config::Config::init(),

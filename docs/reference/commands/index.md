@@ -20,6 +20,7 @@ description: Complete reference for all workmux commands
 | [`path`](./path)               | Get the filesystem path of a worktree           |
 | [`dashboard`](./dashboard)     | TUI dashboard for monitoring agents             |
 | [`sidebar`](./sidebar)         | Live agent status sidebar in tmux               |
+| [`reap-agents`](./reap-agents) | Exit tracked agent panes older than a threshold |
 | [`config edit`](./config)      | Edit the global configuration file              |
 | [`init`](./init)               | Generate configuration file                     |
 | [`claude prune`](./claude)     | Clean up stale Claude Code entries              |
