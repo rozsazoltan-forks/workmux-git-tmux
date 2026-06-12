@@ -185,9 +185,8 @@ fn classify_by_title(title: &str) -> Option<AgentKind> {
 
 fn contains_omp_ascii_case_insensitive(title: &str) -> bool {
     title
-        .as_bytes()
-        .windows(3)
-        .any(|w| w.eq_ignore_ascii_case(b"omp"))
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token.eq_ignore_ascii_case("omp"))
 }
 
 fn is_generic_interpreter(stem: &str) -> bool {
@@ -301,7 +300,17 @@ mod tests {
     #[test]
     fn generic_interpreter_with_omp_title() {
         assert_eq!(classify("bun", "omp"), Some("omp".into()));
+        assert_eq!(classify("bun", "OMP"), Some("omp".into()));
+        assert_eq!(classify("bun", "agent: omp"), Some("omp".into()));
         assert_eq!(classify("python3", "Oh My Pi"), Some("omp".into()));
+    }
+
+    #[test]
+    fn generic_interpreter_with_omp_substring_title_does_not_match() {
+        assert_eq!(classify("bun", "component-tests"), None);
+        assert_eq!(classify("node", "compile server"), None);
+        assert_eq!(classify("python3", "company dashboard"), None);
+        assert_eq!(classify("python3", "completion worker"), None);
     }
 
     #[test]
