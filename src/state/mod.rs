@@ -10,8 +10,11 @@ pub mod store;
 pub(crate) mod test_support;
 mod types;
 
+use std::fs;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context, Result};
 use tracing::warn;
 
 use crate::agent_identity::classify_agent_kind;
@@ -19,6 +22,13 @@ use crate::multiplexer::{AgentStatus, Multiplexer};
 
 pub use store::StateStore;
 pub use types::{AgentState, LastDoneCycleState, PaneKey, RuntimeState};
+
+pub(crate) fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content).context("Failed to write temp file")?;
+    fs::rename(&tmp, path).context("Failed to rename temp file")?;
+    Ok(())
+}
 
 /// Persist an agent state update to the StateStore.
 ///

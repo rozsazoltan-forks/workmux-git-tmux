@@ -217,7 +217,7 @@ fn write_status(dir: &Path, pane_key: &PaneKey, status: &CodexPaneStatus) -> Res
     fs::create_dir_all(dir)?;
     let path = status_path(dir, pane_key);
     let content = serde_json::to_vec_pretty(status)?;
-    write_atomic(&path, &content)
+    super::write_atomic(&path, &content)
 }
 
 fn delete_status(dir: &Path, pane_key: &PaneKey) -> Result<()> {
@@ -227,13 +227,6 @@ fn delete_status(dir: &Path, pane_key: &PaneKey) -> Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("Failed to delete Codex status file"),
     }
-}
-
-fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, content).context("Failed to write Codex status temp file")?;
-    fs::rename(&tmp, path).context("Failed to rename Codex status temp file")?;
-    Ok(())
 }
 
 #[cfg(test)]

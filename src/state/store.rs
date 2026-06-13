@@ -79,7 +79,7 @@ impl StateStore {
     pub fn upsert_agent(&self, state: &AgentState) -> Result<()> {
         let path = self.agent_path(&state.pane_key);
         let content = serde_json::to_string_pretty(state)?;
-        write_atomic(&path, content.as_bytes())
+        super::write_atomic(&path, content.as_bytes())
     }
 
     /// Read agent state by pane key.
@@ -158,7 +158,7 @@ impl StateStore {
     pub fn save_settings(&self, settings: &GlobalSettings) -> Result<()> {
         let path = self.settings_path();
         let content = serde_json::to_string_pretty(settings)?;
-        write_atomic(&path, content.as_bytes())
+        super::write_atomic(&path, content.as_bytes())
     }
 
     // ── Container state management ──────────────────────────────────────────
@@ -300,7 +300,7 @@ impl StateStore {
                 .map(|n| remap_full_name(&n, old_full_base, new_full_base));
 
             let content = serde_json::to_string_pretty(&state)?;
-            write_atomic(&path, content.as_bytes())?;
+            super::write_atomic(&path, content.as_bytes())?;
             migrated += 1;
         }
 
@@ -325,7 +325,7 @@ impl StateStore {
                 .to_string();
         let path = dir.join(format!("{}__{}.json", backend, safe_instance));
         let content = serde_json::to_string(state)?;
-        write_atomic(&path, content.as_bytes())
+        super::write_atomic(&path, content.as_bytes())
     }
 
     /// Read runtime state for a multiplexer instance.
@@ -502,16 +502,6 @@ fn tmux_auto_renamed_windows(
             _ => None,
         })
         .collect()
-}
-
-/// Write content atomically using temp file + rename.
-///
-/// This ensures the target file is never partially written.
-fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, content).context("Failed to write temp file")?;
-    fs::rename(&tmp, path).context("Failed to rename temp file")?;
-    Ok(())
 }
 
 /// Get the workmux state directory (`$XDG_STATE_HOME/workmux`).
