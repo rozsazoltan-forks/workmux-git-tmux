@@ -563,22 +563,10 @@ fn read_agent_file(path: &Path) -> Result<Option<AgentState>> {
 mod tests {
     use super::*;
     use crate::multiplexer::{AgentStatus, LivePaneInfo};
+    use crate::state::test_support::{
+        default_pane_key as test_pane_key, temp_store as test_store, tmux_pane_key,
+    };
     use std::collections::HashMap;
-    use tempfile::TempDir;
-
-    fn test_store() -> (StateStore, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = StateStore::with_path(dir.path().to_path_buf()).unwrap();
-        (store, dir)
-    }
-
-    fn test_pane_key() -> PaneKey {
-        PaneKey {
-            backend: "tmux".to_string(),
-            instance: "default".to_string(),
-            pane_id: "%1".to_string(),
-        }
-    }
 
     fn test_agent_state(key: PaneKey) -> AgentState {
         AgentState {
@@ -625,16 +613,8 @@ mod tests {
     fn test_list_all_agents() {
         let (store, _dir) = test_store();
 
-        let key1 = PaneKey {
-            backend: "tmux".to_string(),
-            instance: "default".to_string(),
-            pane_id: "%1".to_string(),
-        };
-        let key2 = PaneKey {
-            backend: "tmux".to_string(),
-            instance: "default".to_string(),
-            pane_id: "%2".to_string(),
-        };
+        let key1 = tmux_pane_key("%1");
+        let key2 = tmux_pane_key("%2");
 
         store.upsert_agent(&test_agent_state(key1)).unwrap();
         store.upsert_agent(&test_agent_state(key2)).unwrap();

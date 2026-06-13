@@ -6,6 +6,8 @@
 pub mod codex_status;
 pub mod run;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod types;
 
 use std::time::{SystemTime, UNIX_EPOCH};

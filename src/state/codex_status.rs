@@ -239,20 +239,21 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::multiplexer::AgentStatus;
+    use crate::state::test_support::{default_pane_key as test_pane_key, temp_store as test_store};
 
-    fn test_store() -> (StateStore, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = StateStore::with_path(dir.path().to_path_buf()).unwrap();
-        (store, dir)
+    fn assert_apply(
+        pane: &mut CodexPaneStatus,
+        run_id: &str,
+        requested: AgentStatus,
+        expected: AgentStatus,
+    ) {
+        assert_eq!(pane.apply(run_id, requested), expected);
     }
 
-    fn test_pane_key() -> PaneKey {
-        PaneKey {
-            backend: "tmux".to_string(),
-            instance: "default".to_string(),
-            pane_id: "%1".to_string(),
-        }
+    fn start_parent_and_child(pane: &mut CodexPaneStatus) {
+        assert_apply(pane, "parent", AgentStatus::Working, AgentStatus::Working);
+        assert_apply(pane, "child", AgentStatus::Working, AgentStatus::Working);
     }
 
     #[test]
@@ -355,16 +356,9 @@ mod tests {
     #[test]
     fn aggregate_keeps_parent_working_after_child_done() {
         let mut pane = CodexPaneStatus::default();
-        assert_eq!(
-            pane.apply("parent", AgentStatus::Working),
-            AgentStatus::Working
-        );
-        assert_eq!(
-            pane.apply("child", AgentStatus::Working),
-            AgentStatus::Working
-        );
-        assert_eq!(pane.apply("child", AgentStatus::Done), AgentStatus::Working);
-        assert_eq!(pane.apply("parent", AgentStatus::Done), AgentStatus::Done);
+        start_parent_and_child(&mut pane);
+        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
+        assert_apply(&mut pane, "parent", AgentStatus::Done, AgentStatus::Done);
         assert!(pane.is_empty());
     }
 
@@ -378,16 +372,9 @@ mod tests {
     #[test]
     fn double_done_does_not_remove_other_runs() {
         let mut pane = CodexPaneStatus::default();
-        assert_eq!(
-            pane.apply("parent", AgentStatus::Working),
-            AgentStatus::Working
-        );
-        assert_eq!(
-            pane.apply("child", AgentStatus::Working),
-            AgentStatus::Working
-        );
-        assert_eq!(pane.apply("child", AgentStatus::Done), AgentStatus::Working);
-        assert_eq!(pane.apply("child", AgentStatus::Done), AgentStatus::Working);
+        start_parent_and_child(&mut pane);
+        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
+        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
         assert!(!pane.is_empty());
     }
 

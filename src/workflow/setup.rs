@@ -667,17 +667,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn validate_prompt_errors_when_pane_commands_disabled() {
-        let panes = vec![config::PaneConfig {
-            command: Some("<agent>".to_string()),
+    fn prompt_pane(command: &str) -> config::PaneConfig {
+        config::PaneConfig {
+            command: Some(command.into()),
             focus: true,
             ..Default::default()
-        }];
-        let config = make_config_with_agent(Some("claude"));
-        let options = make_options_with_prompt(false); // pane commands disabled
+        }
+    }
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
+    fn split_prompt_pane(command: &str) -> config::PaneConfig {
+        config::PaneConfig {
+            command: Some(command.into()),
+            split: Some(config::SplitDirection::Horizontal),
+            ..Default::default()
+        }
+    }
+
+    fn validate_prompt(
+        panes: &[config::PaneConfig],
+        cli_agent: Option<&str>,
+        config: &config::Config,
+        run_pane_commands: bool,
+    ) -> anyhow::Result<()> {
+        let options = make_options_with_prompt(run_pane_commands);
+        super::validate_prompt_consumption(panes, cli_agent, config, &options)
+    }
+
+    #[test]
+    fn validate_prompt_errors_when_pane_commands_disabled() {
+        let panes = vec![prompt_pane("<agent>")];
+        let config = make_config_with_agent(Some("claude"));
+
+        let result = validate_prompt(&panes, None, &config, false);
         assert!(result.is_err());
         assert!(
             result
@@ -689,15 +710,10 @@ mod tests {
 
     #[test]
     fn validate_prompt_errors_when_no_agent_configured() {
-        let panes = vec![config::PaneConfig {
-            command: Some("vim".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("vim")];
         let config = make_config_with_agent(None); // no agent
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
+        let result = validate_prompt(&panes, None, &config, true);
         assert!(result.is_err());
         assert!(
             result
@@ -714,16 +730,11 @@ mod tests {
                 focus: true,
                 ..Default::default()
             },
-            config::PaneConfig {
-                command: Some("clear".to_string()),
-                split: Some(config::SplitDirection::Horizontal),
-                ..Default::default()
-            },
+            split_prompt_pane("clear"),
         ];
         let config = make_config_with_agent(Some("claude"));
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
+        let result = validate_prompt(&panes, None, &config, true);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("no pane is configured to run the agent"));
@@ -732,101 +743,65 @@ mod tests {
 
     #[test]
     fn validate_prompt_succeeds_with_agent_placeholder() {
-        let panes = vec![config::PaneConfig {
-            command: Some("<agent>".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("<agent>")];
         let config = make_config_with_agent(Some("claude"));
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
     }
 
     #[test]
     fn validate_prompt_succeeds_with_matching_agent_command() {
-        let panes = vec![config::PaneConfig {
-            command: Some("claude".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("claude")];
         let config = make_config_with_agent(Some("claude"));
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
     }
 
     #[test]
     fn validate_prompt_succeeds_with_typed_agent_wrapper() {
-        let panes = vec![config::PaneConfig {
-            command: Some("claudeg --dangerously-skip-permissions".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("claudeg --dangerously-skip-permissions")];
         let config =
             make_config_with_typed_agent("claudeg --dangerously-skip-permissions", "claude");
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
     }
 
     #[test]
     fn validate_prompt_cli_agent_overrides_config() {
-        let panes = vec![config::PaneConfig {
-            command: Some("my-custom-agent".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("my-custom-agent")];
         let config = make_config_with_agent(Some("claude")); // config says claude
-        let options = make_options_with_prompt(true);
 
         // CLI agent is my-custom-agent, which matches the pane
-        let result =
-            super::validate_prompt_consumption(&panes, Some("my-custom-agent"), &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, Some("my-custom-agent"), &config, true).is_ok());
 
         // CLI agent is None, falls back to config (claude), which doesn't match
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_err());
+        assert!(validate_prompt(&panes, None, &config, true).is_err());
     }
 
     #[test]
     fn validate_prompt_succeeds_when_any_pane_matches() {
         let panes = vec![
             config::PaneConfig {
-                command: Some("vim".to_string()), // doesn't match
+                command: Some("vim".into()), // doesn't match
                 ..Default::default()
             },
             config::PaneConfig {
-                command: Some("claude --verbose".to_string()), // matches
                 focus: true,
-                split: Some(config::SplitDirection::Horizontal),
-                ..Default::default()
+                ..split_prompt_pane("claude --verbose") // matches
             },
         ];
         let config = make_config_with_agent(Some("claude"));
-        let options = make_options_with_prompt(true);
 
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
     }
 
     #[test]
     fn validate_prompt_succeeds_with_known_agent_command() {
-        let panes = vec![config::PaneConfig {
-            command: Some("codex --yolo".to_string()),
-            focus: true,
-            ..Default::default()
-        }];
+        let panes = vec![prompt_pane("codex --yolo")];
         let config = make_config_with_agent(None); // no global agent
-        let options = make_options_with_prompt(true);
 
         // Known agent command should pass validation even without global agent
-        let result = super::validate_prompt_consumption(&panes, None, &config, &options);
-        assert!(result.is_ok());
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
     }
 
     #[test]

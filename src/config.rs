@@ -2500,11 +2500,11 @@ impl Config {
         merged
     }
 
-    /// Get default panes.
-    fn default_panes() -> Vec<PaneConfig> {
+    /// Build the default two-pane layout with an optional primary command.
+    fn default_panes_with_primary(command: Option<&str>) -> Vec<PaneConfig> {
         vec![
             PaneConfig {
-                command: None, // Default shell
+                command: command.map(str::to_string),
                 focus: true,
                 ..Default::default()
             },
@@ -2516,20 +2516,14 @@ impl Config {
         ]
     }
 
+    /// Get default panes.
+    fn default_panes() -> Vec<PaneConfig> {
+        Self::default_panes_with_primary(None)
+    }
+
     /// Get default panes for a Claude project.
     fn agent_default_panes() -> Vec<PaneConfig> {
-        vec![
-            PaneConfig {
-                command: Some("<agent>".to_string()),
-                focus: true,
-                ..Default::default()
-            },
-            PaneConfig {
-                command: Some("clear".to_string()),
-                split: Some(SplitDirection::Horizontal),
-                ..Default::default()
-            },
-        ]
+        Self::default_panes_with_primary(Some("<agent>"))
     }
 
     /// Get the window prefix to use.
@@ -2939,6 +2933,76 @@ mod tests {
         SidebarPosition, SidebarWidth, SplitDirection, ToolchainMode, is_agent_command,
         split_first_token, validate_domain, validate_group_add_entry, validate_layouts_config,
     };
+    use tempfile::TempDir;
+
+    fn cfg(edit: impl FnOnce(&mut Config)) -> Config {
+        let mut config = Config::default();
+        edit(&mut config);
+        config
+    }
+
+    fn sandbox_cfg(edit: impl FnOnce(&mut SandboxConfig)) -> Config {
+        cfg(|config| edit(&mut config.sandbox))
+    }
+
+    fn lima_cfg(edit: impl FnOnce(&mut LimaConfig)) -> Config {
+        sandbox_cfg(|sandbox| edit(&mut sandbox.lima))
+    }
+
+    fn container_cfg(edit: impl FnOnce(&mut ContainerConfig)) -> Config {
+        sandbox_cfg(|sandbox| edit(&mut sandbox.container))
+    }
+
+    fn theme_cfg(edit: impl FnOnce(&mut super::ThemeConfig)) -> Config {
+        cfg(|config| edit(&mut config.theme))
+    }
+
+    fn with_env_var<T>(key: &str, value: Option<&str>, run: impl FnOnce() -> T) -> T {
+        let prev = std::env::var_os(key);
+        match value {
+            Some(value) => unsafe {
+                std::env::set_var(key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(key);
+            },
+        }
+        let result = run();
+        match prev {
+            Some(value) => unsafe {
+                std::env::set_var(key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(key);
+            },
+        }
+        result
+    }
+
+    fn pane(command: &str) -> PaneConfig {
+        PaneConfig {
+            command: Some(command.into()),
+            ..Default::default()
+        }
+    }
+
+    fn split_pane(command: &str) -> PaneConfig {
+        PaneConfig {
+            command: Some(command.into()),
+            split: Some(SplitDirection::Horizontal),
+            ..Default::default()
+        }
+    }
+
+    fn git_tempdir() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        temp
+    }
 
     #[test]
     fn merge_keep_parses_boolean_values() {
@@ -3233,19 +3297,11 @@ agents:
 
     use super::find_project_config;
     use std::fs;
-    use tempfile::TempDir;
 
     #[test]
     fn find_project_config_from_subdir() {
-        let temp = TempDir::new().unwrap();
+        let temp = git_tempdir();
         let root = temp.path();
-
-        // Initialize git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(root)
-            .output()
-            .unwrap();
 
         // Create nested structure: root/backend/.workmux.yaml
         let backend = root.join("backend");
@@ -3266,15 +3322,8 @@ agents:
 
     #[test]
     fn find_project_config_nearest_wins() {
-        let temp = TempDir::new().unwrap();
+        let temp = git_tempdir();
         let root = temp.path();
-
-        // Initialize git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(root)
-            .output()
-            .unwrap();
 
         // Create root config
         fs::write(root.join(".workmux.yaml"), "agent: root").unwrap();
@@ -3359,72 +3408,24 @@ agents:
 
     #[test]
     fn sandbox_provision_merge_override() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    provision: Some("echo global".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    provision: Some("echo project".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = lima_cfg(|lima| lima.provision = Some("echo global".into()));
+        let project = lima_cfg(|lima| lima.provision = Some("echo project".into()));
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.lima.provision_script(), Some("echo project"));
     }
 
     #[test]
     fn sandbox_provision_merge_fallback() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    provision: Some("echo global".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = lima_cfg(|lima| lima.provision = Some("echo global".into()));
         let project = Config::default();
-
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.lima.provision_script(), Some("echo global"));
     }
 
     #[test]
     fn sandbox_provision_empty_disables_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    provision: Some("echo global".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    provision: Some("".to_string()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = lima_cfg(|lima| lima.provision = Some("echo global".into()));
+        let project = lima_cfg(|lima| lima.provision = Some("".into()));
         let merged = global.merge(project);
         // Empty string wins over global (project explicitly set it)
         assert_eq!(merged.sandbox.lima.provision, Some("".to_string()));
@@ -3440,45 +3441,16 @@ agents:
 
     #[test]
     fn sandbox_skip_default_provision_merge() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    skip_default_provision: Some(true),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = lima_cfg(|lima| lima.skip_default_provision = Some(true));
         let project = Config::default();
-
         let merged = global.merge(project);
         assert!(merged.sandbox.lima.skip_default_provision());
     }
 
     #[test]
     fn sandbox_skip_default_provision_project_overrides() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    skip_default_provision: Some(true),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                lima: LimaConfig {
-                    skip_default_provision: Some(false),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = lima_cfg(|lima| lima.skip_default_provision = Some(true));
+        let project = lima_cfg(|lima| lima.skip_default_provision = Some(false));
         let merged = global.merge(project);
         assert!(!merged.sandbox.lima.skip_default_provision());
     }
@@ -3565,21 +3537,12 @@ agents:
     #[test]
     fn test_sandbox_host_commands_global_only() {
         // Project config is ignored -- only global matters
-        let global = Config {
-            sandbox: SandboxConfig {
-                host_commands: Some(vec!["just".to_string(), "cargo".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                host_commands: Some(vec!["npm".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.host_commands = Some(vec!["just".into(), "cargo".into()]);
+        });
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.host_commands = Some(vec!["npm".into()]);
+        });
         let merged = global.merge(project);
         assert_eq!(
             merged.sandbox.host_commands(),
@@ -3590,29 +3553,15 @@ agents:
     #[test]
     fn test_sandbox_host_commands_project_ignored_when_no_global() {
         let global = Config::default(); // no host_commands
-        let project = Config {
-            sandbox: SandboxConfig {
-                host_commands: Some(vec!["rm".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| sandbox.host_commands = Some(vec!["rm".into()]));
         let merged = global.merge(project);
         assert!(merged.sandbox.host_commands().is_empty());
     }
 
     #[test]
     fn test_sandbox_host_commands_uses_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                host_commands: Some(vec!["just".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| sandbox.host_commands = Some(vec!["just".into()]));
         let project = Config::default();
-
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.host_commands(), &["just".to_string()]);
     }
@@ -3625,22 +3574,13 @@ agents:
 
     #[test]
     fn test_allow_unsandboxed_host_exec_global_only() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                dangerously_allow_unsandboxed_host_exec: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.dangerously_allow_unsandboxed_host_exec = Some(true);
+        });
         // Project tries to set it -- should be ignored
-        let project = Config {
-            sandbox: SandboxConfig {
-                dangerously_allow_unsandboxed_host_exec: Some(false),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.dangerously_allow_unsandboxed_host_exec = Some(false);
+        });
         let merged = global.merge(project);
         assert!(merged.sandbox.allow_unsandboxed_host_exec());
     }
@@ -3648,14 +3588,9 @@ agents:
     #[test]
     fn test_allow_unsandboxed_host_exec_not_set_in_project() {
         let global = Config::default();
-        let project = Config {
-            sandbox: SandboxConfig {
-                dangerously_allow_unsandboxed_host_exec: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.dangerously_allow_unsandboxed_host_exec = Some(true);
+        });
         let merged = global.merge(project);
         // Project value should be ignored
         assert!(!merged.sandbox.allow_unsandboxed_host_exec());
@@ -3664,21 +3599,8 @@ agents:
     #[test]
     fn test_sandbox_rpc_host_global_only() {
         // Project config is ignored -- only global matters
-        let global = Config {
-            sandbox: SandboxConfig {
-                rpc_host: Some("trusted.host".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                rpc_host: Some("evil.attacker.com".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = sandbox_cfg(|sandbox| sandbox.rpc_host = Some("trusted.host".into()));
+        let project = sandbox_cfg(|sandbox| sandbox.rpc_host = Some("evil.attacker.com".into()));
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.rpc_host, Some("trusted.host".to_string()));
     }
@@ -3686,50 +3608,23 @@ agents:
     #[test]
     fn test_sandbox_rpc_host_project_ignored_when_no_global() {
         let global = Config::default(); // no rpc_host
-        let project = Config {
-            sandbox: SandboxConfig {
-                rpc_host: Some("evil.attacker.com".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| sandbox.rpc_host = Some("evil.attacker.com".into()));
         let merged = global.merge(project);
         assert!(merged.sandbox.rpc_host.is_none());
     }
 
     #[test]
     fn test_sandbox_rpc_host_uses_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                rpc_host: Some("custom.host".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| sandbox.rpc_host = Some("custom.host".into()));
         let project = Config::default();
-
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.rpc_host, Some("custom.host".to_string()));
     }
 
     #[test]
     fn test_sandbox_image_project_overrides_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                image: Some("global:latest".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                image: Some("custom:latest".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = sandbox_cfg(|sandbox| sandbox.image = Some("global:latest".into()));
+        let project = sandbox_cfg(|sandbox| sandbox.image = Some("custom:latest".into()));
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.image, Some("custom:latest".to_string()));
     }
@@ -3737,29 +3632,15 @@ agents:
     #[test]
     fn test_sandbox_image_project_used_when_no_global() {
         let global = Config::default();
-        let project = Config {
-            sandbox: SandboxConfig {
-                image: Some("custom:latest".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| sandbox.image = Some("custom:latest".into()));
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.image, Some("custom:latest".to_string()));
     }
 
     #[test]
     fn test_sandbox_image_falls_back_to_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                image: Some("global:latest".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| sandbox.image = Some("global:latest".into()));
         let project = Config::default();
-
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.image, Some("global:latest".to_string()));
     }
@@ -3784,27 +3665,12 @@ agents:
         // Security: excluded_files is global-only. A project config (.workmux.yaml)
         // MUST NOT be able to weaken or replace the global list; otherwise a
         // malicious repo could delete user-level secret protections.
-        let global = Config {
-            sandbox: SandboxConfig {
-                container: ContainerConfig {
-                    excluded_files: Some(vec![".env".into()]),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                container: ContainerConfig {
-                    excluded_files: Some(vec![".env.production".into()]),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = container_cfg(|container| {
+            container.excluded_files = Some(vec![".env".into()]);
+        });
+        let project = container_cfg(|container| {
+            container.excluded_files = Some(vec![".env.production".into()]);
+        });
         let merged = global.merge(project);
         assert_eq!(
             merged.sandbox.container.excluded_files,
@@ -3817,33 +3683,18 @@ agents:
         // A project that sets excluded_files without any global list must NOT
         // take effect -- project config can never set this field.
         let global = Config::default();
-        let project = Config {
-            sandbox: SandboxConfig {
-                container: ContainerConfig {
-                    excluded_files: Some(vec![".env".into()]),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = container_cfg(|container| {
+            container.excluded_files = Some(vec![".env".into()]);
+        });
         let merged = global.merge(project);
         assert_eq!(merged.sandbox.container.excluded_files, None);
     }
 
     #[test]
     fn test_excluded_files_merge_inherits_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                container: ContainerConfig {
-                    excluded_files: Some(vec![".env".into()]),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = container_cfg(|container| {
+            container.excluded_files = Some(vec![".env".into()]);
+        });
         let merged = global.merge(Config::default());
         assert_eq!(
             merged.sandbox.container.excluded_files,
@@ -3854,21 +3705,12 @@ agents:
     #[test]
     fn test_sandbox_env_passthrough_global_only() {
         // Project config is ignored -- only global matters
-        let global = Config {
-            sandbox: SandboxConfig {
-                env_passthrough: Some(vec!["GITHUB_TOKEN".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                env_passthrough: Some(vec!["AWS_SECRET_ACCESS_KEY".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.env_passthrough = Some(vec!["GITHUB_TOKEN".into()]);
+        });
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.env_passthrough = Some(vec!["AWS_SECRET_ACCESS_KEY".into()]);
+        });
         let merged = global.merge(project);
         assert_eq!(
             merged.sandbox.env_passthrough,
@@ -3879,29 +3721,19 @@ agents:
     #[test]
     fn test_sandbox_env_passthrough_project_ignored_when_no_global() {
         let global = Config::default();
-        let project = Config {
-            sandbox: SandboxConfig {
-                env_passthrough: Some(vec!["AWS_SECRET_ACCESS_KEY".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.env_passthrough = Some(vec!["AWS_SECRET_ACCESS_KEY".into()]);
+        });
         let merged = global.merge(project);
         assert!(merged.sandbox.env_passthrough.is_none());
     }
 
     #[test]
     fn test_sandbox_env_passthrough_uses_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                env_passthrough: Some(vec!["GITHUB_TOKEN".to_string()]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.env_passthrough = Some(vec!["GITHUB_TOKEN".into()]);
+        });
         let project = Config::default();
-
         let merged = global.merge(project);
         assert_eq!(
             merged.sandbox.env_passthrough,
@@ -3912,27 +3744,12 @@ agents:
     #[test]
     fn sandbox_env_global_only() {
         // Project config is ignored -- only global matters
-        let global = Config {
-            sandbox: SandboxConfig {
-                env: Some(HashMap::from([(
-                    "GH_TOKEN".to_string(),
-                    "global_token".to_string(),
-                )])),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            sandbox: SandboxConfig {
-                env: Some(HashMap::from([(
-                    "GH_TOKEN".to_string(),
-                    "project_token".to_string(),
-                )])),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.env = Some(HashMap::from([("GH_TOKEN".into(), "global_token".into())]));
+        });
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.env = Some(HashMap::from([("GH_TOKEN".into(), "project_token".into())]));
+        });
         let merged = global.merge(project);
         let env = merged.sandbox.env.unwrap();
         assert_eq!(env.get("GH_TOKEN").unwrap(), "global_token");
@@ -3941,35 +3758,19 @@ agents:
     #[test]
     fn sandbox_env_project_ignored_when_no_global() {
         let global = Config::default();
-        let project = Config {
-            sandbox: SandboxConfig {
-                env: Some(HashMap::from([(
-                    "GH_TOKEN".to_string(),
-                    "project_token".to_string(),
-                )])),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
+        let project = sandbox_cfg(|sandbox| {
+            sandbox.env = Some(HashMap::from([("GH_TOKEN".into(), "project_token".into())]));
+        });
         let merged = global.merge(project);
         assert!(merged.sandbox.env.is_none());
     }
 
     #[test]
     fn sandbox_env_uses_global() {
-        let global = Config {
-            sandbox: SandboxConfig {
-                env: Some(HashMap::from([(
-                    "GH_TOKEN".to_string(),
-                    "global_token".to_string(),
-                )])),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let global = sandbox_cfg(|sandbox| {
+            sandbox.env = Some(HashMap::from([("GH_TOKEN".into(), "global_token".into())]));
+        });
         let project = Config::default();
-
         let merged = global.merge(project);
         let env = merged.sandbox.env.unwrap();
         assert_eq!(env.get("GH_TOKEN").unwrap(), "global_token");
@@ -4153,35 +3954,24 @@ extra_mounts:
 
     #[test]
     fn test_resolved_agent_config_dir_default() {
-        let config = SandboxConfig::default();
-        let dir = config.resolved_agent_config_dir("claude").unwrap();
-        let home = home::home_dir().unwrap();
-        assert_eq!(dir, home.join(".claude"));
-        let dir = config.resolved_agent_config_dir("omp").unwrap();
-        assert_eq!(dir, home.join(".omp/agent"));
+        with_env_var("PI_CONFIG_DIR", None, || {
+            let config = SandboxConfig::default();
+            let dir = config.resolved_agent_config_dir("claude").unwrap();
+            let home = home::home_dir().unwrap();
+            assert_eq!(dir, home.join(".claude"));
+            let dir = config.resolved_agent_config_dir("omp").unwrap();
+            assert_eq!(dir, home.join(".omp/agent"));
+        });
     }
 
     #[test]
     fn test_resolved_agent_config_dir_omp_with_pi_config_dir() {
-        // SAFETY: this test restores the original value before returning.
-        let prev = std::env::var_os("PI_CONFIG_DIR");
-        unsafe {
-            std::env::set_var("PI_CONFIG_DIR", "custom-omp");
-        }
-
-        let config = SandboxConfig::default();
-        let dir = config.resolved_agent_config_dir("omp").unwrap();
-        let home = home::home_dir().unwrap();
-        assert_eq!(dir, home.join("custom-omp/agent"));
-
-        match prev {
-            Some(v) => unsafe {
-                std::env::set_var("PI_CONFIG_DIR", v);
-            },
-            None => unsafe {
-                std::env::remove_var("PI_CONFIG_DIR");
-            },
-        }
+        with_env_var("PI_CONFIG_DIR", Some("custom-omp"), || {
+            let config = SandboxConfig::default();
+            let dir = config.resolved_agent_config_dir("omp").unwrap();
+            let home = home::home_dir().unwrap();
+            assert_eq!(dir, home.join("custom-omp/agent"));
+        });
     }
 
     #[test]
@@ -5216,15 +5006,10 @@ layouts:
             LayoutConfig {
                 panes: vec![
                     PaneConfig {
-                        command: Some("<agent:claude>".into()),
                         focus: true,
-                        ..Default::default()
+                        ..pane("<agent:claude>")
                     },
-                    PaneConfig {
-                        command: Some("vim".into()),
-                        split: Some(SplitDirection::Horizontal),
-                        ..Default::default()
-                    },
+                    split_pane("vim"),
                 ],
             },
         );
@@ -5235,15 +5020,12 @@ layouts:
     fn validate_panes_multiple_zoom_fails() {
         let panes = vec![
             PaneConfig {
-                command: Some("vim".to_string()),
                 zoom: true,
-                ..Default::default()
+                ..pane("vim")
             },
             PaneConfig {
-                command: Some("echo hi".to_string()),
-                split: Some(SplitDirection::Horizontal),
                 zoom: true,
-                ..Default::default()
+                ..split_pane("echo hi")
             },
         ];
         let err = super::validate_panes_config(&panes).unwrap_err();
@@ -5254,15 +5036,10 @@ layouts:
     fn validate_panes_single_zoom_ok() {
         let panes = vec![
             PaneConfig {
-                command: Some("vim".to_string()),
                 zoom: true,
-                ..Default::default()
+                ..pane("vim")
             },
-            PaneConfig {
-                command: Some("echo hi".to_string()),
-                split: Some(SplitDirection::Horizontal),
-                ..Default::default()
-            },
+            split_pane("echo hi"),
         ];
         assert!(super::validate_panes_config(&panes).is_ok());
     }
@@ -5433,28 +5210,18 @@ theme:
 
     #[test]
     fn theme_config_merge_custom_project_wins() {
-        let global = Config {
-            theme: super::ThemeConfig {
-                scheme: super::ThemeScheme::Default,
-                mode: None,
-                custom: Some(super::CustomThemeColors {
-                    accent: Some("#111111".to_string()),
-                    ..Default::default()
-                }),
-            },
-            ..Default::default()
-        };
-        let project = Config {
-            theme: super::ThemeConfig {
-                scheme: super::ThemeScheme::Default,
-                mode: None,
-                custom: Some(super::CustomThemeColors {
-                    accent: Some("#222222".to_string()),
-                    ..Default::default()
-                }),
-            },
-            ..Default::default()
-        };
+        let global = theme_cfg(|theme| {
+            theme.custom = Some(super::CustomThemeColors {
+                accent: Some("#111111".into()),
+                ..Default::default()
+            });
+        });
+        let project = theme_cfg(|theme| {
+            theme.custom = Some(super::CustomThemeColors {
+                accent: Some("#222222".into()),
+                ..Default::default()
+            });
+        });
         let merged = global.merge(project);
         assert_eq!(
             merged.theme.custom.unwrap().accent,
@@ -5464,17 +5231,12 @@ theme:
 
     #[test]
     fn theme_config_merge_custom_falls_back_to_global() {
-        let global = Config {
-            theme: super::ThemeConfig {
-                scheme: super::ThemeScheme::Default,
-                mode: None,
-                custom: Some(super::CustomThemeColors {
-                    accent: Some("#111111".to_string()),
-                    ..Default::default()
-                }),
-            },
-            ..Default::default()
-        };
+        let global = theme_cfg(|theme| {
+            theme.custom = Some(super::CustomThemeColors {
+                accent: Some("#111111".into()),
+                ..Default::default()
+            });
+        });
         let project = Config::default();
         let merged = global.merge(project);
         assert_eq!(
