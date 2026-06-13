@@ -88,6 +88,67 @@ fn remove_dir_contents(path: &Path) {
 
 /// Find all windows matching the base handle pattern (including duplicates).
 /// Matches: {prefix}{handle} and {prefix}{handle}-{N}
+/// Run pre-remove hooks with environment variables set.
+fn run_pre_remove_hooks(
+    context: &WorkflowContext,
+    handle: &str,
+    worktree_path: &Path,
+    branch_name: &str,
+) -> Result<()> {
+    if let Some(pre_remove_hooks) = &context.config.pre_remove {
+        info!(
+            branch = branch_name,
+            count = pre_remove_hooks.len(),
+            "cleanup:running pre-remove hooks"
+        );
+        let abs_worktree_path = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.to_path_buf());
+        let abs_project_root = context
+            .main_worktree_root
+            .canonicalize()
+            .unwrap_or_else(|_| context.main_worktree_root.clone());
+        let worktree_path_str = abs_worktree_path.to_string_lossy();
+        let project_root_str = abs_project_root.to_string_lossy();
+        let hook_env = [
+            ("WORKMUX_HANDLE", handle),
+            ("WM_HANDLE", handle),
+            ("WM_WORKTREE_PATH", worktree_path_str.as_ref()),
+            ("WM_PROJECT_ROOT", project_root_str.as_ref()),
+        ];
+        for command in pre_remove_hooks {
+            // Run the hook with the worktree path as the working directory.
+            // This allows for relative paths like `node_modules` in the command.
+            cmd::shell_command_with_env(command, worktree_path, &hook_env)
+                .with_context(|| format!("Failed to run pre-remove command: '{}'", command))?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove prompt files from temp dir matching the branch name.
+/// Handles both legacy fixed names and timestamped names:
+/// workmux-prompt-{name}.md and workmux-prompt-{name}-{timestamp}.md
+fn cleanup_prompt_files(branch_name: &str) {
+    let temp_dir = std::env::temp_dir();
+    let prefix = format!("workmux-prompt-{}", branch_name);
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str())
+                && filename.starts_with(&prefix)
+                && filename.ends_with(".md")
+            {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(path = %path.display(), error = %e, "cleanup:failed to remove prompt file");
+                } else {
+                    debug!(path = %path.display(), "cleanup:prompt file removed");
+                }
+            }
+        }
+    }
+}
+
 fn find_matching_windows(
     mux: &dyn Multiplexer,
     prefix: &str,
@@ -229,37 +290,7 @@ pub fn cleanup(
         // Skip if the worktree directory doesn't exist (e.g., user manually deleted it).
         // Skip if --no-hooks is set (e.g., RPC-triggered merge).
         if worktree_path.exists() && !no_hooks {
-            if let Some(pre_remove_hooks) = &context.config.pre_remove {
-                info!(
-                    branch = branch_name,
-                    count = pre_remove_hooks.len(),
-                    "cleanup:running pre-remove hooks"
-                );
-                // Resolve absolute paths for environment variables.
-                // canonicalize() ensures symlinks are resolved and paths are absolute.
-                let abs_worktree_path = worktree_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| worktree_path.to_path_buf());
-                let abs_project_root = context
-                    .main_worktree_root
-                    .canonicalize()
-                    .unwrap_or_else(|_| context.main_worktree_root.clone());
-                let worktree_path_str = abs_worktree_path.to_string_lossy();
-                let project_root_str = abs_project_root.to_string_lossy();
-                let hook_env = [
-                    ("WORKMUX_HANDLE", handle),
-                    ("WM_HANDLE", handle),
-                    ("WM_WORKTREE_PATH", worktree_path_str.as_ref()),
-                    ("WM_PROJECT_ROOT", project_root_str.as_ref()),
-                ];
-                for command in pre_remove_hooks {
-                    // Run the hook with the worktree path as the working directory.
-                    // This allows for relative paths like `node_modules` in the command.
-                    cmd::shell_command_with_env(command, worktree_path, &hook_env).with_context(
-                        || format!("Failed to run pre-remove command: '{}'", command),
-                    )?;
-                }
-            }
+            run_pre_remove_hooks(context, handle, worktree_path, branch_name)?;
         } else {
             debug!(
                 path = %worktree_path.display(),
@@ -312,25 +343,8 @@ pub fn cleanup(
             info!(branch = branch_name, path = %worktree_path.display(), "cleanup:worktree directory removed");
         }
 
-        // Clean up prompt files (handles both legacy fixed names and timestamped names)
-        // Matches: workmux-prompt-{name}.md and workmux-prompt-{name}-{timestamp}.md
-        let temp_dir = std::env::temp_dir();
-        let prefix = format!("workmux-prompt-{}", branch_name);
-        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(filename) = path.file_name().and_then(|n| n.to_str())
-                    && filename.starts_with(&prefix)
-                    && filename.ends_with(".md")
-                {
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        warn!(path = %path.display(), error = %e, "cleanup:failed to remove prompt file");
-                    } else {
-                        debug!(path = %path.display(), "cleanup:prompt file removed");
-                    }
-                }
-            }
-        }
+        // Clean up prompt files immediately (harmless, doesn't affect CWD)
+        cleanup_prompt_files(branch_name);
 
         // 2. Remove any worktree lock before pruning.
         // Git creates a "locked" file during `git worktree add` (with content "initializing")
@@ -440,54 +454,12 @@ pub fn cleanup(
 
         // Run pre-remove hooks synchronously (they need the worktree intact)
         // Skip if --no-hooks is set (e.g., RPC-triggered merge).
-        if worktree_path.exists()
-            && !no_hooks
-            && let Some(pre_remove_hooks) = &context.config.pre_remove
-        {
-            info!(
-                branch = branch_name,
-                count = pre_remove_hooks.len(),
-                "cleanup:running pre-remove hooks"
-            );
-            let abs_worktree_path = worktree_path
-                .canonicalize()
-                .unwrap_or_else(|_| worktree_path.to_path_buf());
-            let abs_project_root = context
-                .main_worktree_root
-                .canonicalize()
-                .unwrap_or_else(|_| context.main_worktree_root.clone());
-            let worktree_path_str = abs_worktree_path.to_string_lossy();
-            let project_root_str = abs_project_root.to_string_lossy();
-            let hook_env = [
-                ("WORKMUX_HANDLE", handle),
-                ("WM_HANDLE", handle),
-                ("WM_WORKTREE_PATH", worktree_path_str.as_ref()),
-                ("WM_PROJECT_ROOT", project_root_str.as_ref()),
-            ];
-            for command in pre_remove_hooks {
-                cmd::shell_command_with_env(command, worktree_path, &hook_env)
-                    .with_context(|| format!("Failed to run pre-remove command: '{}'", command))?;
-            }
+        if worktree_path.exists() && !no_hooks {
+            run_pre_remove_hooks(context, handle, worktree_path, branch_name)?;
         }
 
         // Clean up prompt files immediately (harmless, doesn't affect CWD)
-        let temp_dir = std::env::temp_dir();
-        let prefix = format!("workmux-prompt-{}", branch_name);
-        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(filename) = path.file_name().and_then(|n| n.to_str())
-                    && filename.starts_with(&prefix)
-                    && filename.ends_with(".md")
-                {
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        warn!(path = %path.display(), error = %e, "cleanup:failed to remove prompt file");
-                    } else {
-                        debug!(path = %path.display(), "cleanup:prompt file removed");
-                    }
-                }
-            }
-        }
+        cleanup_prompt_files(branch_name);
 
         // Defer destructive operations (rename, prune, branch delete) until after window/session close.
         // This keeps the worktree path valid so agents can run their hooks.
