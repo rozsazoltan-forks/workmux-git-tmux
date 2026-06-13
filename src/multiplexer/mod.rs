@@ -18,6 +18,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 pub use handle::MuxHandle;
@@ -227,10 +228,48 @@ pub trait Multiplexer: Send + Sync {
     fn get_all_session_names(&self) -> Result<HashSet<String>>;
 
     /// Filter a list of window names, returning only those that still exist
-    fn filter_active_windows(&self, windows: &[String]) -> Result<Vec<String>>;
+    fn filter_active_windows(&self, windows: &[String]) -> Result<Vec<String>> {
+        let all_current = self.get_all_window_names()?;
+
+        Ok(windows
+            .iter()
+            .filter(|w| all_current.contains(*w))
+            .cloned()
+            .collect())
+    }
 
     /// Wait until all specified windows are closed
-    fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()>;
+    fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
+        if full_window_names.is_empty() {
+            return Ok(());
+        }
+
+        let targets: HashSet<String> = full_window_names.iter().cloned().collect();
+
+        if targets.len() == 1 {
+            println!("Waiting for window '{}' to close...", full_window_names[0]);
+        } else {
+            println!("Waiting for {} windows to close...", targets.len());
+        }
+
+        loop {
+            if !self.is_running()? {
+                return Ok(());
+            }
+
+            let current_windows = self.get_all_window_names()?;
+
+            let any_exists = targets
+                .iter()
+                .any(|target| current_windows.contains(target));
+
+            if !any_exists {
+                return Ok(());
+            }
+
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
 
     /// Wait until the specified session is closed
     fn wait_until_session_closed(&self, full_session_name: &str) -> Result<()>;

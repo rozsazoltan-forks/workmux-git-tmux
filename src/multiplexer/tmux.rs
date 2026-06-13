@@ -578,48 +578,6 @@ impl Multiplexer for TmuxBackend {
         Ok(sessions.lines().map(String::from).collect())
     }
 
-    fn filter_active_windows(&self, windows: &[String]) -> Result<Vec<String>> {
-        let all_current = self.get_all_window_names()?;
-
-        Ok(windows
-            .iter()
-            .filter(|w| all_current.contains(*w))
-            .cloned()
-            .collect())
-    }
-
-    fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
-        if full_window_names.is_empty() {
-            return Ok(());
-        }
-
-        let targets: HashSet<String> = full_window_names.iter().cloned().collect();
-
-        if targets.len() == 1 {
-            println!("Waiting for window '{}' to close...", full_window_names[0]);
-        } else {
-            println!("Waiting for {} windows to close...", targets.len());
-        }
-
-        loop {
-            if !self.is_running()? {
-                return Ok(());
-            }
-
-            let current_windows = self.get_all_window_names()?;
-
-            let any_exists = targets
-                .iter()
-                .any(|target| current_windows.contains(target));
-
-            if !any_exists {
-                return Ok(());
-            }
-
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
-
     fn wait_until_session_closed(&self, full_session_name: &str) -> Result<()> {
         println!("Waiting for session '{}' to close...", full_session_name);
 

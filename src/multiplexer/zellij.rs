@@ -469,15 +469,6 @@ impl Multiplexer for ZellijBackend {
         Ok(tabs.into_iter().map(|t| t.name).collect())
     }
 
-    fn filter_active_windows(&self, windows: &[String]) -> Result<Vec<String>> {
-        let active = self.get_all_window_names()?;
-        Ok(windows
-            .iter()
-            .filter(|w| active.contains(*w))
-            .cloned()
-            .collect())
-    }
-
     fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
         use std::thread;
 
