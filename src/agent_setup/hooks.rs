@@ -4,6 +4,7 @@
 //! hooks are stored as JSON objects under a "hooks" key, with workmux
 //! commands in the "command" fields. This module provides shared helpers.
 
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 /// Check if a parsed JSON value contains any workmux status hooks.
@@ -124,6 +125,57 @@ pub fn remove_empty_hooks_wrapper(settings: &mut Value) -> bool {
         modified
     });
     root.unwrap_or(false)
+}
+
+/// Merge hook groups into a config root, deduplicating by value equality.
+///
+/// `config_root` is the parsed JSON settings file (must be an object).
+/// `hooks_to_add` is the hooks map from the embedded config file
+/// (e.g. `{"Stop": [{"hooks": [...]}]}`).
+///
+/// Ensures a "hooks" key exists in config_root, then for each event in
+/// hooks_to_add: if the event already exists in config, merges groups
+/// avoiding duplicates by serde_json::Value equality; otherwise inserts
+/// the new groups. Skips incoming hook_groups that are not arrays.
+/// Errors if an existing hooks.<event> value is not an array.
+pub fn merge_hook_groups(config_root: &mut Value, hooks_to_add: &Value) -> Result<()> {
+    let config_obj = config_root
+        .as_object_mut()
+        .context("config root is not an object")?;
+
+    if !config_obj.contains_key("hooks") {
+        config_obj.insert("hooks".to_string(), Value::Object(serde_json::Map::new()));
+    }
+
+    let existing_hooks = config_obj
+        .get_mut("hooks")
+        .and_then(|v| v.as_object_mut())
+        .context("hooks value is not an object")?;
+
+    let hooks_map = hooks_to_add
+        .as_object()
+        .context("hooks to add is not an object")?;
+
+    for (event, hook_groups) in hooks_map {
+        let Some(new_groups) = hook_groups.as_array() else {
+            continue;
+        };
+
+        if let Some(existing_groups) = existing_hooks.get_mut(event) {
+            let arr = existing_groups
+                .as_array_mut()
+                .with_context(|| format!("hooks.{event} is not an array"))?;
+            for group in new_groups {
+                if !arr.contains(group) {
+                    arr.push(group.clone());
+                }
+            }
+        } else {
+            existing_hooks.insert(event.clone(), hook_groups.clone());
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -323,5 +375,135 @@ mod tests {
         let mut settings = json!({ "enabledPlugins": {} });
         assert!(remove_empty_hooks_wrapper(&mut settings));
         assert!(settings.get("enabledPlugins").is_none());
+    }
+
+    #[test]
+    fn test_merge_hook_groups_into_empty() {
+        let mut config = json!({ "hooks": {} });
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}]
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        let hooks = config["hooks"].as_object().unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(
+            config["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "workmux set-window-status done"
+        );
+    }
+
+    #[test]
+    fn test_merge_hook_groups_into_empty_root_creates_hooks() {
+        let mut config = json!({});
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}]
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        let hooks = config["hooks"].as_object().unwrap();
+        assert_eq!(hooks.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_hook_groups_deduplicates() {
+        let mut config = json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{"type": "command", "command": "workmux set-window-status done"}]
+                }]
+            }
+        });
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}]
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        let stop = config["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_hook_groups_preserves_existing() {
+        let mut config = json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{"type": "command", "command": "python3 my-hook.py"}]
+                }]
+            }
+        });
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}]
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        let stop = config["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_hook_groups_adds_new_event() {
+        let mut config = json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{"type": "command", "command": "python3 my-hook.py"}]
+                }]
+            }
+        });
+        let hooks_to_add = json!({
+            "UserPromptSubmit": [{
+                "hooks": [{"type": "command", "command": "workmux set-window-status working"}]
+            }]
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        assert!(
+            config["hooks"]
+                .as_object()
+                .unwrap()
+                .contains_key("UserPromptSubmit")
+        );
+        assert!(config["hooks"].as_object().unwrap().contains_key("Stop"));
+    }
+
+    #[test]
+    fn test_merge_hook_groups_skips_non_array() {
+        let mut config = json!({ "hooks": {} });
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}],
+            "InvalidEvent": "not an array"
+        });
+        merge_hook_groups(&mut config, &hooks_to_add).unwrap();
+        // InvalidEvent should be silently skipped, Stop should be merged
+        assert!(config["hooks"].as_object().unwrap().contains_key("Stop"));
+        assert!(
+            !config["hooks"]
+                .as_object()
+                .unwrap()
+                .contains_key("InvalidEvent")
+        );
+    }
+
+    #[test]
+    fn test_merge_hook_groups_errors_on_non_array_existing() {
+        let mut config = json!({
+            "hooks": {
+                "Stop": "not an array"
+            }
+        });
+        let hooks_to_add = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "workmux set-window-status done"}]}]
+        });
+        let result = merge_hook_groups(&mut config, &hooks_to_add);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("hooks.Stop is not an array")
+        );
+    }
+
+    #[test]
+    fn test_merge_hook_groups_errors_on_non_object_root() {
+        let mut config = json!("not an object");
+        let hooks_to_add = json!({});
+        let result = merge_hook_groups(&mut config, &hooks_to_add);
+        assert!(result.is_err());
     }
 }

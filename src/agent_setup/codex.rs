@@ -209,40 +209,7 @@ pub fn install() -> Result<String> {
 
     let hooks_to_add = load_hooks()?;
 
-    // Ensure config.hooks exists as an object
-    let config_obj = config
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("hooks.json root is not an object"))?;
-
-    if !config_obj.contains_key("hooks") {
-        config_obj.insert("hooks".to_string(), Value::Object(serde_json::Map::new()));
-    }
-
-    let existing_hooks = config_obj
-        .get_mut("hooks")
-        .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| anyhow::anyhow!("hooks.json hooks is not an object"))?;
-
-    // Merge each hook event, deduplicating by value equality
-    let hooks_map = hooks_to_add.as_object().expect("hooks is an object");
-    for (event, hook_groups) in hooks_map {
-        let Some(new_groups) = hook_groups.as_array() else {
-            continue;
-        };
-
-        if let Some(existing_groups) = existing_hooks.get_mut(event) {
-            let arr = existing_groups
-                .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("hooks.{event} is not an array"))?;
-            for group in new_groups {
-                if !arr.contains(group) {
-                    arr.push(group.clone());
-                }
-            }
-        } else {
-            existing_hooks.insert(event.clone(), hook_groups.clone());
-        }
-    }
+    hooks::merge_hook_groups(&mut config, &hooks_to_add)?;
 
     // Write back with pretty formatting
     let output = serde_json::to_string_pretty(&config)?;
@@ -262,7 +229,6 @@ pub fn install() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_hooks_json_is_valid() {
@@ -286,112 +252,6 @@ mod tests {
         assert!(obj.contains_key("UserPromptSubmit"));
         assert!(obj.contains_key("PostToolUse"));
         assert!(obj.contains_key("Stop"));
-    }
-
-    #[test]
-    fn test_merge_into_empty_config() {
-        let mut config = json!({ "hooks": {} });
-        let hooks_to_add = load_hooks().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let existing_hooks = config.get_mut("hooks").unwrap().as_object_mut().unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            existing_hooks.insert(event.clone(), hook_groups.clone());
-        }
-
-        let hooks = config.get("hooks").unwrap().as_object().unwrap();
-        assert_eq!(hooks.len(), 3);
-    }
-
-    #[test]
-    fn test_merge_deduplicates() {
-        let mut config = json!({
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "workmux set-window-status done"
-                    }]
-                }]
-            }
-        });
-
-        let hooks_to_add = load_hooks().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let existing_hooks = config.get_mut("hooks").unwrap().as_object_mut().unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            let new_groups = hook_groups.as_array().unwrap();
-            if let Some(existing_groups) = existing_hooks.get_mut(event) {
-                let arr = existing_groups.as_array_mut().unwrap();
-                for group in new_groups {
-                    if !arr.contains(group) {
-                        arr.push(group.clone());
-                    }
-                }
-            } else {
-                existing_hooks.insert(event.clone(), hook_groups.clone());
-            }
-        }
-
-        // Stop should still have exactly 1 group (not duplicated)
-        let stop = config
-            .get("hooks")
-            .unwrap()
-            .get("Stop")
-            .unwrap()
-            .as_array()
-            .unwrap();
-        assert_eq!(stop.len(), 1);
-    }
-
-    #[test]
-    fn test_merge_preserves_existing_hooks() {
-        let mut config = json!({
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "python3 my-stop-hook.py"
-                    }]
-                }]
-            }
-        });
-
-        let hooks_to_add = load_hooks().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let existing_hooks = config.get_mut("hooks").unwrap().as_object_mut().unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            let new_groups = hook_groups.as_array().unwrap();
-            if let Some(existing_groups) = existing_hooks.get_mut(event) {
-                let arr = existing_groups.as_array_mut().unwrap();
-                for group in new_groups {
-                    if !arr.contains(group) {
-                        arr.push(group.clone());
-                    }
-                }
-            } else {
-                existing_hooks.insert(event.clone(), hook_groups.clone());
-            }
-        }
-
-        // Stop should have 2 groups (original + workmux)
-        let stop = config
-            .get("hooks")
-            .unwrap()
-            .get("Stop")
-            .unwrap()
-            .as_array()
-            .unwrap();
-        assert_eq!(stop.len(), 2);
-
-        // All 3 events should be present
-        let hooks = config.get("hooks").unwrap().as_object().unwrap();
-        assert_eq!(hooks.len(), 3);
     }
 
     #[test]

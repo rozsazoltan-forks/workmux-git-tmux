@@ -143,40 +143,7 @@ pub fn install() -> Result<String> {
 
     let hooks_to_add = load_hooks_from_plugin()?;
 
-    // Ensure settings.hooks exists as an object
-    let settings_obj = settings
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("settings.json root is not an object"))?;
-
-    if !settings_obj.contains_key("hooks") {
-        settings_obj.insert("hooks".to_string(), Value::Object(serde_json::Map::new()));
-    }
-
-    let existing_hooks = settings_obj
-        .get_mut("hooks")
-        .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| anyhow::anyhow!("settings.json hooks is not an object"))?;
-
-    // Merge each hook event, deduplicating by value equality
-    let hooks_map = hooks_to_add.as_object().expect("plugin hooks is an object");
-    for (event, hook_groups) in hooks_map {
-        let Some(new_groups) = hook_groups.as_array() else {
-            continue;
-        };
-
-        if let Some(existing_groups) = existing_hooks.get_mut(event) {
-            let arr = existing_groups
-                .as_array_mut()
-                .ok_or_else(|| anyhow::anyhow!("hooks.{event} is not an array"))?;
-            for group in new_groups {
-                if !arr.contains(group) {
-                    arr.push(group.clone());
-                }
-            }
-        } else {
-            existing_hooks.insert(event.clone(), hook_groups.clone());
-        }
-    }
+    hooks::merge_hook_groups(&mut settings, &hooks_to_add)?;
 
     // Write back with pretty formatting
     let output = serde_json::to_string_pretty(&settings)?;
@@ -213,71 +180,6 @@ mod tests {
     fn test_claude_dir_defaults_to_home() {
         let path = claude_dir_from_config(PathBuf::from("/home/test"), None);
         assert_eq!(path, PathBuf::from("/home/test/.claude"));
-    }
-
-    #[test]
-    fn test_merge_into_empty_settings() {
-        let mut settings = json!({});
-        let hooks_to_add = load_hooks_from_plugin().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let settings_obj = settings.as_object_mut().unwrap();
-        settings_obj.insert("hooks".to_string(), Value::Object(serde_json::Map::new()));
-        let existing_hooks = settings_obj
-            .get_mut("hooks")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            existing_hooks.insert(event.clone(), hook_groups.clone());
-        }
-
-        let hooks = settings.get("hooks").unwrap().as_object().unwrap();
-        assert_eq!(hooks.len(), 4);
-    }
-
-    #[test]
-    fn test_merge_deduplicates() {
-        let mut settings = json!({
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "workmux set-window-status done"
-                    }]
-                }]
-            }
-        });
-
-        let hooks_to_add = load_hooks_from_plugin().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let existing_hooks = settings.get_mut("hooks").unwrap().as_object_mut().unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            let new_groups = hook_groups.as_array().unwrap();
-            if let Some(existing_groups) = existing_hooks.get_mut(event) {
-                let arr = existing_groups.as_array_mut().unwrap();
-                for group in new_groups {
-                    if !arr.contains(group) {
-                        arr.push(group.clone());
-                    }
-                }
-            } else {
-                existing_hooks.insert(event.clone(), hook_groups.clone());
-            }
-        }
-
-        // Stop should still have exactly 1 group (not duplicated)
-        let stop = settings
-            .get("hooks")
-            .unwrap()
-            .get("Stop")
-            .unwrap()
-            .as_array()
-            .unwrap();
-        assert_eq!(stop.len(), 1);
     }
 
     #[test]
@@ -363,53 +265,6 @@ mod tests {
             }
         });
         assert!(matches!(check_settings(&settings), StatusCheck::Installed));
-    }
-
-    #[test]
-    fn test_merge_preserves_existing_hooks() {
-        let mut settings = json!({
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "afplay /System/Library/Sounds/Glass.aiff"
-                    }]
-                }]
-            }
-        });
-
-        let hooks_to_add = load_hooks_from_plugin().unwrap();
-        let hooks_map = hooks_to_add.as_object().unwrap();
-
-        let existing_hooks = settings.get_mut("hooks").unwrap().as_object_mut().unwrap();
-
-        for (event, hook_groups) in hooks_map {
-            let new_groups = hook_groups.as_array().unwrap();
-            if let Some(existing_groups) = existing_hooks.get_mut(event) {
-                let arr = existing_groups.as_array_mut().unwrap();
-                for group in new_groups {
-                    if !arr.contains(group) {
-                        arr.push(group.clone());
-                    }
-                }
-            } else {
-                existing_hooks.insert(event.clone(), hook_groups.clone());
-            }
-        }
-
-        // Stop should have 2 groups (original afplay + workmux)
-        let stop = settings
-            .get("hooks")
-            .unwrap()
-            .get("Stop")
-            .unwrap()
-            .as_array()
-            .unwrap();
-        assert_eq!(stop.len(), 2);
-
-        // All 4 events should be present
-        let hooks = settings.get("hooks").unwrap().as_object().unwrap();
-        assert_eq!(hooks.len(), 4);
     }
 
     #[test]
