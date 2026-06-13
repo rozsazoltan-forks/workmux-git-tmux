@@ -389,6 +389,26 @@ pub fn parse_diff_into_hunks(raw_diff: &str) -> Vec<DiffHunk> {
     let mut current_filename = String::new();
     let mut current_hunk_lines: Vec<&str> = Vec::new();
     let mut in_hunk = false;
+    let finalize_hunk = |hunks: &mut Vec<DiffHunk>,
+                         current_file_header: &str,
+                         current_filename: &str,
+                         current_hunk_lines: &mut Vec<&str>| {
+        let hunk_body = current_hunk_lines.join("\n");
+        let (added, removed) = count_hunk_stats(&hunk_body);
+        let full_diff = format!("{}\n{}", current_file_header, hunk_body);
+        let rendered_content = render_through_delta(&full_diff);
+        let parsed_lines = parse_ansi_to_lines(&rendered_content);
+        hunks.push(DiffHunk {
+            file_header: current_file_header.to_string(),
+            hunk_body,
+            filename: current_filename.to_string(),
+            lines_added: added,
+            lines_removed: removed,
+            rendered_content,
+            parsed_lines,
+        });
+        current_hunk_lines.clear();
+    };
 
     for line in raw_diff.lines() {
         let stripped = strip_ansi_escapes(line);
@@ -396,21 +416,12 @@ pub fn parse_diff_into_hunks(raw_diff: &str) -> Vec<DiffHunk> {
         if stripped.starts_with("diff --git") {
             // Save previous hunk if any
             if in_hunk && !current_hunk_lines.is_empty() {
-                let hunk_body = current_hunk_lines.join("\n");
-                let (added, removed) = count_hunk_stats(&hunk_body);
-                let full_diff = format!("{}\n{}", current_file_header, hunk_body);
-                let rendered_content = render_through_delta(&full_diff);
-                let parsed_lines = parse_ansi_to_lines(&rendered_content);
-                hunks.push(DiffHunk {
-                    file_header: current_file_header.clone(),
-                    hunk_body,
-                    filename: current_filename.clone(),
-                    lines_added: added,
-                    lines_removed: removed,
-                    rendered_content,
-                    parsed_lines,
-                });
-                current_hunk_lines.clear();
+                finalize_hunk(
+                    &mut hunks,
+                    &current_file_header,
+                    &current_filename,
+                    &mut current_hunk_lines,
+                );
             }
 
             // Start new file
@@ -427,21 +438,12 @@ pub fn parse_diff_into_hunks(raw_diff: &str) -> Vec<DiffHunk> {
         } else if stripped.starts_with("@@") {
             // Save previous hunk if any
             if in_hunk && !current_hunk_lines.is_empty() {
-                let hunk_body = current_hunk_lines.join("\n");
-                let (added, removed) = count_hunk_stats(&hunk_body);
-                let full_diff = format!("{}\n{}", current_file_header, hunk_body);
-                let rendered_content = render_through_delta(&full_diff);
-                let parsed_lines = parse_ansi_to_lines(&rendered_content);
-                hunks.push(DiffHunk {
-                    file_header: current_file_header.clone(),
-                    hunk_body,
-                    filename: current_filename.clone(),
-                    lines_added: added,
-                    lines_removed: removed,
-                    rendered_content,
-                    parsed_lines,
-                });
-                current_hunk_lines.clear();
+                finalize_hunk(
+                    &mut hunks,
+                    &current_file_header,
+                    &current_filename,
+                    &mut current_hunk_lines,
+                );
             }
 
             // Start new hunk
@@ -459,20 +461,12 @@ pub fn parse_diff_into_hunks(raw_diff: &str) -> Vec<DiffHunk> {
 
     // Don't forget the last hunk
     if in_hunk && !current_hunk_lines.is_empty() {
-        let hunk_body = current_hunk_lines.join("\n");
-        let (added, removed) = count_hunk_stats(&hunk_body);
-        let full_diff = format!("{}\n{}", current_file_header, hunk_body);
-        let rendered_content = render_through_delta(&full_diff);
-        let parsed_lines = parse_ansi_to_lines(&rendered_content);
-        hunks.push(DiffHunk {
-            file_header: current_file_header,
-            hunk_body,
-            filename: current_filename,
-            lines_added: added,
-            lines_removed: removed,
-            rendered_content,
-            parsed_lines,
-        });
+        finalize_hunk(
+            &mut hunks,
+            &current_file_header,
+            &current_filename,
+            &mut current_hunk_lines,
+        );
     }
 
     hunks
