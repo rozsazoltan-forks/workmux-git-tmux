@@ -30,6 +30,13 @@ macro_rules! impl_passthrough_typed_value_parser {
     };
 }
 
+fn try_list_worktrees() -> Option<Vec<(PathBuf, String)>> {
+    if !git::is_git_repo().unwrap_or(false) {
+        return None;
+    }
+    git::list_worktrees().ok()
+}
+
 #[derive(Clone, Debug)]
 struct WorktreeBranchParser;
 
@@ -39,15 +46,8 @@ impl WorktreeBranchParser {
     }
 
     fn get_branches(&self) -> Vec<String> {
-        // Don't attempt completions if not in a git repo.
-        if !git::is_git_repo().unwrap_or(false) {
+        let Some(worktrees) = try_list_worktrees() else {
             return Vec::new();
-        }
-
-        let worktrees = match git::list_worktrees() {
-            Ok(wt) => wt,
-            // Fail silently on completion; don't disrupt the user's shell.
-            Err(_) => return Vec::new(),
         };
 
         let main_branch = git::get_default_branch().ok();
@@ -75,15 +75,8 @@ impl WorktreeHandleParser {
     }
 
     fn get_handles() -> Vec<String> {
-        // Don't attempt completions if not in a git repo.
-        if !git::is_git_repo().unwrap_or(false) {
+        let Some(worktrees) = try_list_worktrees() else {
             return Vec::new();
-        }
-
-        let worktrees = match git::list_worktrees() {
-            Ok(wt) => wt,
-            // Fail silently on completion; don't disrupt the user's shell.
-            Err(_) => return Vec::new(),
         };
 
         let main_worktree_root = git::get_main_worktree_root().ok();
