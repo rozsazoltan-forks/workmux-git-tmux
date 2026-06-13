@@ -96,6 +96,33 @@ pub(super) fn create_sidebar_in_window(
     Ok(())
 }
 
+enum SidebarWindowScope<'a> {
+    All,
+    Session(&'a str),
+}
+
+fn sidebar_window_extent_format(position: SidebarPosition) -> &'static str {
+    match position {
+        SidebarPosition::Left => "#{window_id} #{window_width}",
+        SidebarPosition::Top => "#{window_id} #{window_height}",
+    }
+}
+
+fn list_windows_for_sidebars(
+    scope: SidebarWindowScope<'_>,
+    position: SidebarPosition,
+) -> Result<String> {
+    let format = sidebar_window_extent_format(position);
+    match scope {
+        SidebarWindowScope::All => Cmd::new("tmux")
+            .args(&["list-windows", "-a", "-F", format])
+            .run_and_capture_stdout(),
+        SidebarWindowScope::Session(session_id) => Cmd::new("tmux")
+            .args(&["list-windows", "-t", session_id, "-F", format])
+            .run_and_capture_stdout(),
+    }
+}
+
 /// Create sidebars in all existing tmux windows.
 ///
 /// Computes width per-window from `#{window_width}` so each window gets a
@@ -103,13 +130,7 @@ pub(super) fn create_sidebar_in_window(
 /// stale geometry, but `reflow()` corrects them on reattach.
 pub(super) fn create_sidebars_in_all_windows(config: &crate::config::Config) -> Result<()> {
     let position = super::read_sidebar_position(config);
-    let format = match position {
-        SidebarPosition::Left => "#{window_id} #{window_width}",
-        SidebarPosition::Top => "#{window_id} #{window_height}",
-    };
-    let output = Cmd::new("tmux")
-        .args(&["list-windows", "-a", "-F", format])
-        .run_and_capture_stdout()?;
+    let output = list_windows_for_sidebars(SidebarWindowScope::All, position)?;
 
     debug!(position = ?position, "create_sidebars_in_all_windows: creating sidebars");
     create_sidebars_from_window_output(&output, config, position)
@@ -121,13 +142,7 @@ pub(super) fn create_sidebars_in_session(
     config: &crate::config::Config,
 ) -> Result<()> {
     let position = super::read_sidebar_position(config);
-    let format = match position {
-        SidebarPosition::Left => "#{window_id} #{window_width}",
-        SidebarPosition::Top => "#{window_id} #{window_height}",
-    };
-    let output = Cmd::new("tmux")
-        .args(&["list-windows", "-t", session_id, "-F", format])
-        .run_and_capture_stdout()?;
+    let output = list_windows_for_sidebars(SidebarWindowScope::Session(session_id), position)?;
 
     debug!(session_id, position = ?position, "create_sidebars_in_session: creating sidebars");
     create_sidebars_from_window_output(&output, config, position)
@@ -149,6 +164,29 @@ fn create_sidebars_from_window_output(
         let _ = create_sidebar_in_window(window_id, position, size);
     }
     Ok(())
+}
+
+fn compute_sidebar_layouts(
+    sidebars: &[(String, String)],
+    position: SidebarPosition,
+) -> Vec<Option<String>> {
+    sidebars
+        .iter()
+        .map(|(window_id, pane_id)| layout_after_sidebar_remove(window_id, pane_id, position))
+        .collect()
+}
+
+fn kill_panes_and_apply_layouts(sidebars: &[(String, String)], layouts: &[Option<String>]) {
+    for (_, pane_id) in sidebars {
+        let _ = Cmd::new("tmux").args(&["kill-pane", "-t", pane_id]).run();
+    }
+    for (i, (window_id, _)) in sidebars.iter().enumerate() {
+        if let Some(layout) = &layouts[i] {
+            let _ = Cmd::new("tmux")
+                .args(&["select-layout", "-t", window_id, layout])
+                .run();
+        }
+    }
 }
 
 /// Kill sidebar panes only in a specific session (by session_id).
@@ -179,22 +217,8 @@ pub(super) fn kill_sidebars_in_session(session_id: &str) {
         })
         .collect();
 
-    let layouts: Vec<_> = session_sidebars
-        .iter()
-        .map(|(window_id, pane_id)| layout_after_sidebar_remove(window_id, pane_id, position))
-        .collect();
-
-    for (_, pane_id) in &session_sidebars {
-        let _ = Cmd::new("tmux").args(&["kill-pane", "-t", pane_id]).run();
-    }
-
-    for (i, (window_id, _)) in session_sidebars.iter().enumerate() {
-        if let Some(layout) = &layouts[i] {
-            let _ = Cmd::new("tmux")
-                .args(&["select-layout", "-t", window_id, layout])
-                .run();
-        }
-    }
+    let layouts = compute_sidebar_layouts(&session_sidebars, position);
+    kill_panes_and_apply_layouts(&session_sidebars, &layouts);
 }
 
 /// Find all sidebar panes across all windows. Returns (window_id, pane_id) pairs.
@@ -230,23 +254,8 @@ pub(super) fn kill_all_sidebars_and_restore_layouts() {
     let position = super::read_sidebar_position(&config);
     let sidebars = list_sidebar_panes();
 
-    // Compute target layouts from the live tree before destroying any panes
-    let layouts: Vec<_> = sidebars
-        .iter()
-        .map(|(window_id, pane_id)| layout_after_sidebar_remove(window_id, pane_id, position))
-        .collect();
-
-    for (_, pane_id) in &sidebars {
-        let _ = Cmd::new("tmux").args(&["kill-pane", "-t", pane_id]).run();
-    }
-
-    for (i, (window_id, _)) in sidebars.iter().enumerate() {
-        if let Some(layout) = &layouts[i] {
-            let _ = Cmd::new("tmux")
-                .args(&["select-layout", "-t", window_id, layout])
-                .run();
-        }
-    }
+    let layouts = compute_sidebar_layouts(&sidebars, position);
+    kill_panes_and_apply_layouts(&sidebars, &layouts);
 }
 
 /// Shut down sidebars (called when any sidebar quits).
@@ -322,32 +331,26 @@ pub(super) fn shutdown_all_sidebars() {
         _ => list_sidebar_panes(),
     };
 
-    // Compute target layouts from the live tree before destroying any panes
-    let computed_layouts: Vec<_> = sidebars
+    let layouts = compute_sidebar_layouts(&sidebars, position);
+
+    let other_sidebars: Vec<(String, String)> = sidebars
         .iter()
-        .map(|(window_id, pane_id)| layout_after_sidebar_remove(window_id, pane_id, position))
+        .filter(|(_, pane_id)| pane_id != &our_pane)
+        .cloned()
         .collect();
+    let other_layouts: Vec<Option<String>> = sidebars
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, pane_id))| pane_id != &our_pane)
+        .map(|(i, _)| layouts[i].clone())
+        .collect();
+    let our_layout = sidebars
+        .iter()
+        .enumerate()
+        .find(|(_, (_, pane_id))| pane_id == &our_pane)
+        .and_then(|(i, _)| layouts[i].clone());
 
-    let mut other_window_layouts = Vec::new();
-    let mut our_layout = None;
-
-    for (i, (window_id, pane_id)) in sidebars.iter().enumerate() {
-        if pane_id != &our_pane {
-            other_window_layouts.push((window_id.clone(), computed_layouts[i].clone()));
-            let _ = Cmd::new("tmux").args(&["kill-pane", "-t", pane_id]).run();
-        } else {
-            our_layout = computed_layouts[i].clone();
-        }
-    }
-
-    // Apply layouts for other windows
-    for (window_id, layout) in &other_window_layouts {
-        if let Some(layout) = layout {
-            let _ = Cmd::new("tmux")
-                .args(&["select-layout", "-t", window_id, layout])
-                .run();
-        }
-    }
+    kill_panes_and_apply_layouts(&other_sidebars, &other_layouts);
 
     // Full cleanup only if no scoped sessions remain (or global mode)
     let remaining_scope = super::current_scope();
