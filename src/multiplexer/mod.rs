@@ -195,10 +195,16 @@ pub trait Multiplexer: Send + Sync {
     }
 
     /// Check if a window exists by prefix and name
-    fn window_exists(&self, prefix: &str, name: &str) -> Result<bool>;
+    fn window_exists(&self, prefix: &str, name: &str) -> Result<bool> {
+        let full_name = util::prefixed(prefix, name);
+        self.window_exists_by_full_name(&full_name)
+    }
 
     /// Check if a window exists by its full name
-    fn window_exists_by_full_name(&self, full_name: &str) -> Result<bool>;
+    fn window_exists_by_full_name(&self, full_name: &str) -> Result<bool> {
+        let names = self.get_all_window_names()?;
+        Ok(names.contains(full_name))
+    }
 
     fn window_target_exists(&self, target: &WindowTarget) -> Result<bool> {
         self.window_exists_by_full_name(&target.full_name)

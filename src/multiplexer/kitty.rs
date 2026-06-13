@@ -498,16 +498,6 @@ impl Multiplexer for KittyBackend {
         Ok(())
     }
 
-    fn window_exists(&self, prefix: &str, name: &str) -> Result<bool> {
-        let full_name = util::prefixed(prefix, name);
-        self.window_exists_by_full_name(&full_name)
-    }
-
-    fn window_exists_by_full_name(&self, full_name: &str) -> Result<bool> {
-        let names = self.get_all_window_names()?;
-        Ok(names.contains(full_name))
-    }
-
     fn current_window_name(&self) -> Result<Option<String>> {
         let window_id = match self.current_window_id() {
             Some(id) => id,

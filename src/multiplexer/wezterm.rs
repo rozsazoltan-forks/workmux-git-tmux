@@ -422,16 +422,6 @@ impl Multiplexer for WezTermBackend {
         Ok(())
     }
 
-    fn window_exists(&self, prefix: &str, name: &str) -> Result<bool> {
-        let full_name = util::prefixed(prefix, name);
-        self.window_exists_by_full_name(&full_name)
-    }
-
-    fn window_exists_by_full_name(&self, full_name: &str) -> Result<bool> {
-        let names = self.get_all_window_names()?;
-        Ok(names.contains(full_name))
-    }
-
     fn current_window_name(&self) -> Result<Option<String>> {
         let pane_id: u64 = match std::env::var("WEZTERM_PANE")
             .ok()
