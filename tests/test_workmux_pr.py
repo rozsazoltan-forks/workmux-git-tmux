@@ -2,54 +2,17 @@
 Tests for PR checkout functionality (workmux add --pr <number>)
 """
 
-from pathlib import Path
-
 from .conftest import (
-    MuxEnvironment,
     get_window_name,
     get_worktree_path,
     install_fake_gh_cli,
     run_workmux_command,
     setup_git_repo,
 )
-
-
-def setup_pr_remote_and_branch(
-    env: MuxEnvironment,
-    repo_path: Path,
-    remote_repo_path: Path,
-    branch_name: str,
-):
-    """Helper to set up a fetchable remote with a PR branch"""
-    # Use a fake GitHub URL for the remote so get_repo_owner() can parse it
-    github_url = "https://github.com/testowner/testrepo.git"
-
-    env.run_command(
-        ["git", "remote", "add", "origin", github_url],
-        cwd=repo_path,
-    )
-    # Set pushurl to the local path so git operations actually work
-    env.run_command(
-        ["git", "remote", "set-url", "--push", "origin", str(remote_repo_path)],
-        cwd=repo_path,
-    )
-    # Also need to configure insteadOf for fetch operations
-    env.run_command(
-        ["git", "config", f"url.{remote_repo_path}.insteadOf", github_url],
-        cwd=repo_path,
-    )
-    env.run_command(["git", "push", "-u", "origin", "main"], cwd=repo_path)
-
-    # Create and push the PR branch
-    env.run_command(["git", "checkout", "-b", branch_name], cwd=repo_path)
-    env.run_command(
-        ["git", "commit", "--allow-empty", "-m", "PR changes"],
-        cwd=repo_path,
-    )
-    env.run_command(["git", "push", "-u", "origin", branch_name], cwd=repo_path)
-    env.run_command(["git", "checkout", "main"], cwd=repo_path)
-    # Delete the local branch so workmux can create it fresh (matching gh pr checkout behavior)
-    env.run_command(["git", "branch", "-D", branch_name], cwd=repo_path)
+from .support.pr import (
+    install_fake_pr_view,
+    setup_pr_remote_and_branch,
+)
 
 
 def test_add_pr_from_same_repo(mux_server, workmux_exe_path, remote_repo_path):
@@ -59,16 +22,7 @@ def test_add_pr_from_same_repo(mux_server, workmux_exe_path, remote_repo_path):
     setup_git_repo(repo_path, env.env)
 
     setup_pr_remote_and_branch(env, repo_path, remote_repo_path, "feature-branch")
-
-    pr_data = {
-        "headRefName": "feature-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "OPEN",
-        "isDraft": False,
-        "title": "Add new feature",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=123, json_response=pr_data)
+    install_fake_pr_view(env)
 
     result = run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 123")
 
@@ -91,16 +45,7 @@ def test_add_pr_with_custom_branch_name(mux_server, workmux_exe_path, remote_rep
     setup_git_repo(repo_path, env.env)
 
     setup_pr_remote_and_branch(env, repo_path, remote_repo_path, "feature-branch")
-
-    pr_data = {
-        "headRefName": "feature-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "OPEN",
-        "isDraft": False,
-        "title": "Add new feature",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=123, json_response=pr_data)
+    install_fake_pr_view(env)
 
     result = run_workmux_command(
         env, workmux_exe_path, repo_path, "add my-review --pr 123"
@@ -134,15 +79,7 @@ def test_add_pr_reuses_existing_local_branch(
         cwd=repo_path,
     ).stdout.strip()
 
-    pr_data = {
-        "headRefName": "feature-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "OPEN",
-        "isDraft": False,
-        "title": "Add new feature",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=123, json_response=pr_data)
+    install_fake_pr_view(env)
 
     result = run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 123")
 
@@ -171,15 +108,13 @@ def test_add_pr_merged_state_warning(mux_server, workmux_exe_path, remote_repo_p
 
     setup_pr_remote_and_branch(env, repo_path, remote_repo_path, "merged-branch")
 
-    pr_data = {
-        "headRefName": "merged-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "MERGED",
-        "isDraft": False,
-        "title": "Already merged PR",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=456, json_response=pr_data)
+    install_fake_pr_view(
+        env,
+        number=456,
+        branch="merged-branch",
+        state="MERGED",
+        title="Already merged PR",
+    )
 
     result = run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 456")
 
@@ -198,15 +133,13 @@ def test_add_pr_draft_warning(mux_server, workmux_exe_path, remote_repo_path):
 
     setup_pr_remote_and_branch(env, repo_path, remote_repo_path, "draft-branch")
 
-    pr_data = {
-        "headRefName": "draft-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "OPEN",
-        "isDraft": True,
-        "title": "WIP: Work in progress",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=789, json_response=pr_data)
+    install_fake_pr_view(
+        env,
+        number=789,
+        branch="draft-branch",
+        draft=True,
+        title="WIP: Work in progress",
+    )
 
     result = run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 789")
 
@@ -260,8 +193,6 @@ def test_add_pr_fails_when_gh_not_installed(
         cwd=repo_path,
     )
 
-    # Don't install fake gh CLI - it won't be found in PATH
-
     result = run_workmux_command(
         env, workmux_exe_path, repo_path, "add --pr 123", expect_fail=True
     )
@@ -298,7 +229,6 @@ def test_add_pr_fork_with_main_branch(mux_server, workmux_exe_path, remote_repo_
     repo_path = env.tmp_path
     setup_git_repo(repo_path, env.env)
 
-    # Set up origin with a GitHub-style URL
     github_url = "https://github.com/testowner/testrepo.git"
     env.run_command(
         ["git", "remote", "add", "origin", github_url],
@@ -314,13 +244,11 @@ def test_add_pr_fork_with_main_branch(mux_server, workmux_exe_path, remote_repo_
     )
     env.run_command(["git", "push", "-u", "origin", "main"], cwd=repo_path)
 
-    # Create a separate "fork" bare repo that has a "main" branch with a commit
     fork_repo_path = repo_path.parent / "fork_repo.git"
     env.run_command(
         ["git", "clone", "--bare", str(remote_repo_path), str(fork_repo_path)]
     )
 
-    # Create a commit on main in the fork (via a temp checkout)
     fork_work = repo_path.parent / "fork_work"
     env.run_command(
         ["git", "clone", str(fork_repo_path), str(fork_work)], cwd=repo_path
@@ -333,30 +261,26 @@ def test_add_pr_fork_with_main_branch(mux_server, workmux_exe_path, remote_repo_
     )
     env.run_command(["git", "push", "origin", "main"], cwd=fork_work)
 
-    # Map the fork URL that ensure_fork_remote will construct
     fork_github_url = "https://github.com/forkowner/testrepo.git"
     env.run_command(
         ["git", "config", f"url.{fork_repo_path}.insteadOf", fork_github_url],
         cwd=repo_path,
     )
 
-    # PR data: fork PR where head branch is "main" from a different owner
-    pr_data = {
-        "headRefName": "main",
-        "headRepositoryOwner": {"login": "forkowner"},
-        "state": "OPEN",
-        "isDraft": False,
-        "title": "Use ANSI palette colors",
-        "author": {"login": "forkowner"},
-    }
-    install_fake_gh_cli(env, pr_number=16, json_response=pr_data)
+    install_fake_pr_view(
+        env,
+        number=16,
+        branch="main",
+        owner="forkowner",
+        title="Use ANSI palette colors",
+        author="forkowner",
+    )
 
     result = run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 16")
 
     assert "PR #16" in result.stdout
     assert "Use ANSI palette colors" in result.stdout
 
-    # The worktree should be created with the prefixed branch name
     worktree_path = get_worktree_path(repo_path, "forkowner-main")
     assert worktree_path.exists(), (
         f"Expected worktree at {worktree_path} (forkowner-main), "
@@ -377,21 +301,10 @@ def test_add_pr_fails_when_worktree_exists(
     setup_git_repo(repo_path, env.env)
 
     setup_pr_remote_and_branch(env, repo_path, remote_repo_path, "feature-branch")
+    install_fake_pr_view(env)
 
-    pr_data = {
-        "headRefName": "feature-branch",
-        "headRepositoryOwner": {"login": "testowner"},
-        "state": "OPEN",
-        "isDraft": False,
-        "title": "Add new feature",
-        "author": {"login": "contributor"},
-    }
-    install_fake_gh_cli(env, pr_number=123, json_response=pr_data)
-
-    # First checkout should succeed
     run_workmux_command(env, workmux_exe_path, repo_path, "add --pr 123")
 
-    # Second checkout should fail
     result = run_workmux_command(
         env, workmux_exe_path, repo_path, "add --pr 123", expect_fail=True
     )

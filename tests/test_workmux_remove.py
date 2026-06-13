@@ -16,6 +16,14 @@ from .conftest import (
     run_workmux_remove,
     write_workmux_config,
 )
+from .support.worktrees import (
+    add_worktrees,
+    assert_branches_deleted,
+    assert_branches_present,
+    assert_windows_closed,
+    assert_worktrees_exist,
+    assert_worktrees_removed,
+)
 
 
 def test_remove_clean_branch_succeeds_without_prompt(
@@ -616,29 +624,14 @@ def test_remove_all_flag(
     env = mux_server
     write_workmux_config(mux_repo_path)
 
-    # Create multiple worktrees
-    branch1 = "feature-one"
-    branch2 = "feature-two"
-    branch3 = "feature-three"
+    worktrees = add_worktrees(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        ["feature-one", "feature-two", "feature-three"],
+    )
+    assert_worktrees_exist(worktrees)
 
-    window1 = get_window_name(branch1)
-    window2 = get_window_name(branch2)
-    window3 = get_window_name(branch3)
-
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch1)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch2)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch3)
-
-    worktree1 = get_worktree_path(mux_repo_path, branch1)
-    worktree2 = get_worktree_path(mux_repo_path, branch2)
-    worktree3 = get_worktree_path(mux_repo_path, branch3)
-
-    # Verify all worktrees exist
-    assert worktree1.exists(), "Worktree 1 should exist"
-    assert worktree2.exists(), "Worktree 2 should exist"
-    assert worktree3.exists(), "Worktree 3 should exist"
-
-    # Run remove --all with confirmation
     run_workmux_remove(
         env,
         workmux_exe_path,
@@ -647,21 +640,9 @@ def test_remove_all_flag(
         user_input="y",
     )
 
-    # Verify all worktrees were removed
-    assert not worktree1.exists(), "Worktree 1 should be removed"
-    assert not worktree2.exists(), "Worktree 2 should be removed"
-    assert not worktree3.exists(), "Worktree 3 should be removed"
-
-    # Verify windows are closed
-    windows = env.list_windows()
-    assert window1 not in windows, "Window 1 should be closed"
-    assert window2 not in windows, "Window 2 should be closed"
-    assert window3 not in windows, "Window 3 should be closed"
-
-    # Verify branches are deleted
-    for branch in [branch1, branch2, branch3]:
-        result = env.run_command(["git", "branch", "--list", branch], cwd=mux_repo_path)
-        assert branch not in result.stdout, f"Branch {branch} should be deleted"
+    assert_worktrees_removed(worktrees)
+    assert_windows_closed(env, worktrees)
+    assert_branches_deleted(env, mux_repo_path, [wt.branch for wt in worktrees])
 
 
 def test_remove_all_with_force(
@@ -750,16 +731,11 @@ def test_remove_all_with_keep_branch(
     branch1 = "keep-all-one"
     branch2 = "keep-all-two"
 
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch1)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch2)
+    worktrees = add_worktrees(env, workmux_exe_path, mux_repo_path, [branch1, branch2])
 
-    # Add unmerged commits (should not block removal when using --keep-branch)
-    worktree1 = get_worktree_path(mux_repo_path, branch1)
-    worktree2 = get_worktree_path(mux_repo_path, branch2)
-    create_commit(env, worktree1, "feat: work one")
-    create_commit(env, worktree2, "feat: work two")
+    create_commit(env, worktrees[0].path, "feat: work one")
+    create_commit(env, worktrees[1].path, "feat: work two")
 
-    # Run remove --all --keep-branch with confirmation
     run_workmux_remove(
         env,
         workmux_exe_path,
@@ -769,14 +745,8 @@ def test_remove_all_with_keep_branch(
         user_input="y",
     )
 
-    # Verify worktrees were removed
-    assert not worktree1.exists(), "Worktree 1 should be removed"
-    assert not worktree2.exists(), "Worktree 2 should be removed"
-
-    # Verify branches still exist
-    for branch in [branch1, branch2]:
-        result = env.run_command(["git", "branch", "--list", branch], cwd=mux_repo_path)
-        assert branch in result.stdout, f"Branch {branch} should still exist"
+    assert_worktrees_removed(worktrees)
+    assert_branches_present(env, mux_repo_path, [wt.branch for wt in worktrees])
 
 
 def test_remove_multiple_branches(
@@ -790,24 +760,15 @@ def test_remove_multiple_branches(
     branch2 = "multi-rm-two"
     branch3 = "multi-rm-three"
 
-    window1 = get_window_name(branch1)
-    window2 = get_window_name(branch2)
-    window3 = get_window_name(branch3)
+    worktrees = add_worktrees(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        [branch1, branch2, branch3],
+    )
+    removed, kept = worktrees[:2], worktrees[2]
+    assert_worktrees_exist(worktrees)
 
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch1)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch2)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch3)
-
-    worktree1 = get_worktree_path(mux_repo_path, branch1)
-    worktree2 = get_worktree_path(mux_repo_path, branch2)
-    worktree3 = get_worktree_path(mux_repo_path, branch3)
-
-    # Verify all worktrees exist
-    assert worktree1.exists(), "Worktree 1 should exist"
-    assert worktree2.exists(), "Worktree 2 should exist"
-    assert worktree3.exists(), "Worktree 3 should exist"
-
-    # Remove two of the three worktrees by specifying multiple names
     run_workmux_remove(
         env,
         workmux_exe_path,
@@ -816,25 +777,15 @@ def test_remove_multiple_branches(
         force=True,
     )
 
-    # Verify first two worktrees were removed
-    assert not worktree1.exists(), "Worktree 1 should be removed"
-    assert not worktree2.exists(), "Worktree 2 should be removed"
+    assert_worktrees_removed(removed)
+    assert kept.path.exists(), "Worktree 3 should still exist"
 
-    # Verify third worktree still exists
-    assert worktree3.exists(), "Worktree 3 should still exist"
-
-    # Verify windows are closed for removed worktrees
     windows = env.list_windows()
-    assert window1 not in windows, "Window 1 should be closed"
-    assert window2 not in windows, "Window 2 should be closed"
-    assert window3 in windows, "Window 3 should still exist"
+    assert removed[0].window not in windows, "Window 1 should be closed"
+    assert removed[1].window not in windows, "Window 2 should be closed"
+    assert kept.window in windows, "Window 3 should still exist"
 
-    # Verify branches are deleted for removed worktrees
-    for branch in [branch1, branch2]:
-        result = env.run_command(["git", "branch", "--list", branch], cwd=mux_repo_path)
-        assert branch not in result.stdout, f"Branch {branch} should be deleted"
-
-    # Verify third branch still exists
+    assert_branches_deleted(env, mux_repo_path, [wt.branch for wt in removed])
     result = env.run_command(["git", "branch", "--list", branch3], cwd=mux_repo_path)
     assert branch3 in result.stdout, f"Branch {branch3} should still exist"
 
@@ -950,17 +901,11 @@ def test_remove_multiple_with_keep_branch(
     branch1 = "multi-keep-one"
     branch2 = "multi-keep-two"
 
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch1)
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch2)
+    worktrees = add_worktrees(env, workmux_exe_path, mux_repo_path, [branch1, branch2])
 
-    worktree1 = get_worktree_path(mux_repo_path, branch1)
-    worktree2 = get_worktree_path(mux_repo_path, branch2)
+    create_commit(env, worktrees[0].path, "feat: work one")
+    create_commit(env, worktrees[1].path, "feat: work two")
 
-    # Add unmerged commits (should not prompt because --keep-branch doesn't delete branches)
-    create_commit(env, worktree1, "feat: work one")
-    create_commit(env, worktree2, "feat: work two")
-
-    # Remove both with --keep-branch (no confirmation needed)
     run_workmux_remove(
         env,
         workmux_exe_path,
@@ -969,14 +914,8 @@ def test_remove_multiple_with_keep_branch(
         keep_branch=True,
     )
 
-    # Verify worktrees were removed
-    assert not worktree1.exists(), "Worktree 1 should be removed"
-    assert not worktree2.exists(), "Worktree 2 should be removed"
-
-    # Verify branches still exist
-    for branch in [branch1, branch2]:
-        result = env.run_command(["git", "branch", "--list", branch], cwd=mux_repo_path)
-        assert branch in result.stdout, f"Branch {branch} should still exist"
+    assert_worktrees_removed(worktrees)
+    assert_branches_present(env, mux_repo_path, [wt.branch for wt in worktrees])
 
 
 def test_remove_branch_merged_into_local_main_not_remote(

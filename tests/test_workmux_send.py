@@ -10,15 +10,11 @@ from pathlib import Path
 
 from .conftest import (
     MuxEnvironment,
-    get_window_name,
-    poll_until,
     run_workmux_add,
     run_workmux_command,
-    wait_for_window_ready,
     write_workmux_config,
 )
-
-from .test_agent_state import build_status_cmd, list_agent_state_files
+from .support.agent_state import start_active_agent
 
 
 def test_send_error_worktree_not_found(
@@ -72,21 +68,14 @@ def test_send_inline_text_to_agent(
 ):
     """Send delivers inline text to a running agent's pane."""
     env = mux_server
-    branch_name = "feature-send-text"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "waiting")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-send-text",
+        status="waiting",
     )
 
-    # Send a simple single-word text (no shell quoting issues)
     result = run_workmux_command(
         env,
         workmux_exe_path,
@@ -101,22 +90,14 @@ def test_send_from_file_to_agent(
 ):
     """Send delivers file content to a running agent's pane."""
     env = mux_server
-    branch_name = "feature-send-file"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "waiting")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-send-file",
+        status="waiting",
     )
 
-    # Create a file with content to send in /tmp (short path to avoid
-    # tmux line-length truncation with long PATH env var in test harness)
     prompt_file = Path("/tmp/wm_prompt.txt")
     prompt_file.write_text("hello-from-file\n")
 

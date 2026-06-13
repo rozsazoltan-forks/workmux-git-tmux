@@ -1,47 +1,13 @@
 """Tests for `workmux setup` command."""
 
 import json
-import shlex
 from pathlib import Path
-
 
 from .conftest import (
     MuxEnvironment,
-    get_scripts_dir,
-    make_env_script,
-    poll_until_file_has_content,
     run_workmux_command,
-    wait_for_pane_output,
 )
-
-
-def run_setup_interactive(env: MuxEnvironment, workmux_exe_path: Path) -> Path:
-    """Run `workmux setup` interactively in the tmux pane.
-
-    Returns path to exit code file. The setup output is visible in the pane,
-    allowing send_keys to respond to prompts.
-    """
-    scripts_dir = get_scripts_dir(env)
-    exit_code_file = scripts_dir / "setup_exit_code.txt"
-    if exit_code_file.exists():
-        exit_code_file.unlink()
-
-    script = make_env_script(
-        env,
-        (
-            f"{shlex.quote(str(workmux_exe_path))} setup; "
-            f"echo $? > {shlex.quote(str(exit_code_file))}"
-        ),
-        {
-            "PATH": env.env["PATH"],
-            "HOME": env.env.get("HOME", ""),
-            "TMPDIR": env.env.get("TMPDIR", "/tmp"),
-            "XDG_CONFIG_HOME": env.env.get("XDG_CONFIG_HOME", ""),
-            "XDG_STATE_HOME": env.env.get("XDG_STATE_HOME", ""),
-        },
-    )
-    env.send_keys("test:", script, enter=True)
-    return exit_code_file
+from .support.setup import run_setup_with_answers, write_claude_manual_status_hook
 
 
 # ---------------------------------------------------------------------------
@@ -69,23 +35,7 @@ class TestSetupNoPrompt:
         repo_path: Path,
     ):
         """Claude with manual hooks shows all-configured message."""
-        claude_dir = mux_server.home_path / ".claude"
-        claude_dir.mkdir()
-        settings = {
-            "hooks": {
-                "Stop": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "workmux set-window-status done",
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-        (claude_dir / "settings.json").write_text(json.dumps(settings))
+        write_claude_manual_status_hook(mux_server.home_path / ".claude")
 
         result = run_workmux_command(
             mux_server, workmux_exe_path, repo_path, "setup --hooks"
@@ -165,25 +115,7 @@ class TestSetupNoPrompt:
         repo_path: Path,
     ):
         """Both agents configured shows all-configured message."""
-        # Claude
-        claude_dir = mux_server.home_path / ".claude"
-        claude_dir.mkdir()
-        settings = {
-            "hooks": {
-                "Stop": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "workmux set-window-status done",
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-        (claude_dir / "settings.json").write_text(json.dumps(settings))
-        # OpenCode
+        write_claude_manual_status_hook(mux_server.home_path / ".claude")
         plugin_dir = mux_server.home_path / ".config" / "opencode" / "plugin"
         plugin_dir.mkdir(parents=True)
         (plugin_dir / "workmux-status.ts").write_text("// plugin")
@@ -229,16 +161,7 @@ class TestSetupInstall:
         claude_dir = mux_server.home_path / ".claude"
         claude_dir.mkdir()
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "y")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="y")
 
         settings_path = claude_dir / "settings.json"
         assert settings_path.exists()
@@ -259,16 +182,7 @@ class TestSetupInstall:
         claude_dir = mux_server.home_path / ".claude"
         claude_dir.mkdir()
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "")  # Just Enter
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="")
 
         settings_path = claude_dir / "settings.json"
         assert settings_path.exists()
@@ -285,16 +199,7 @@ class TestSetupInstall:
         claude_dir = mux_server.home_path / ".claude"
         claude_dir.mkdir()
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "n")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="n")
 
         settings_path = claude_dir / "settings.json"
         assert not settings_path.exists()
@@ -309,16 +214,7 @@ class TestSetupInstall:
         opencode_dir = mux_server.home_path / ".config" / "opencode"
         opencode_dir.mkdir(parents=True)
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "y")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="y")
 
         package_json_path = opencode_dir / "package.json"
         plugin_path = opencode_dir / "plugins" / "workmux-status.ts"
@@ -337,16 +233,7 @@ class TestSetupInstall:
         omp_dir = mux_server.home_path / ".omp" / "agent"
         omp_dir.mkdir(parents=True)
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "y")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="y")
 
         extension_path = omp_dir / "extensions" / "workmux-status.ts"
         assert extension_path.exists()
@@ -371,25 +258,14 @@ class TestSetupInstall:
         opencode_dir = mux_server.home_path / ".config" / "opencode"
         opencode_dir.mkdir(parents=True)
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "y")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="y")
 
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
-
-        # Claude hooks installed
         settings_path = claude_dir / "settings.json"
         assert settings_path.exists()
         settings = json.loads(settings_path.read_text())
         assert "hooks" in settings
         assert "Stop" in settings["hooks"]
 
-        # OpenCode plugin installed
         package_json_path = opencode_dir / "package.json"
         plugin_path = opencode_dir / "plugins" / "workmux-status.ts"
         assert package_json_path.exists()
@@ -421,31 +297,18 @@ class TestSetupInstall:
         }
         (claude_dir / "settings.json").write_text(json.dumps(existing, indent=2))
 
-        exit_code_file = run_setup_interactive(mux_server, workmux_exe_path)
-        wait_for_pane_output(
-            mux_server, "test", "Install status tracking hooks?", timeout=5.0
-        )
-        mux_server.send_keys("test:", "y")
-        wait_for_pane_output(mux_server, "test", "Install bundled skills?", timeout=5.0)
-        mux_server.send_keys("test:", "n")
-
-        assert poll_until_file_has_content(exit_code_file, timeout=5.0)
-        assert exit_code_file.read_text().strip() == "0"
+        run_setup_with_answers(mux_server, workmux_exe_path, hooks_answer="y")
 
         settings = json.loads((claude_dir / "settings.json").read_text())
-        # Existing non-hook settings preserved
         assert "permissions" in settings
         assert settings["permissions"]["allow"] == ["Bash"]
-        # Existing hooks preserved
         stop_commands = [
             hook.get("command", "")
             for group in settings["hooks"]["Stop"]
             for hook in group.get("hooks", [])
         ]
         assert "afplay /System/Library/Sounds/Glass.aiff" in stop_commands
-        # Workmux hooks added alongside existing
         assert "workmux set-window-status done" in stop_commands
-        # New hook events added
         assert "UserPromptSubmit" in settings["hooks"]
         assert "Notification" in settings["hooks"]
         assert "PostToolUse" in settings["hooks"]

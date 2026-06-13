@@ -9,15 +9,11 @@ from pathlib import Path
 
 from .conftest import (
     MuxEnvironment,
-    get_window_name,
-    poll_until,
     run_workmux_add,
     run_workmux_command,
-    wait_for_window_ready,
     write_workmux_config,
 )
-
-from .test_agent_state import build_status_cmd, list_agent_state_files
+from .support.agent_state import start_active_agent
 
 
 def test_status_no_agents(
@@ -44,22 +40,15 @@ def test_status_with_active_agent(
 ):
     """Status shows agent info when an agent is active."""
     env = mux_server
-    branch_name = "feature-status-active"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-status-active",
+        status="working",
     )
 
     result = run_workmux_command(env, workmux_exe_path, mux_repo_path, "status")
-    # Should show the worktree and its status
     assert "working" in result.stdout
     assert "WORKTREE" in result.stdout
     assert "STATUS" in result.stdout
@@ -70,18 +59,12 @@ def test_status_json_with_active_agent(
 ):
     """Status --json returns agent data when an agent is active."""
     env = mux_server
-    branch_name = "feature-status-json"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "done")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-status-json",
+        status="done",
     )
 
     result = run_workmux_command(env, workmux_exe_path, mux_repo_path, "status --json")
@@ -103,20 +86,14 @@ def test_status_filter_by_worktree(
     """Status filters to show only the specified worktree."""
     env = mux_server
     branch_name = "feature-status-filt"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        branch_name,
+        status="working",
     )
 
-    # Filter by this worktree's branch name - should return it
     result = run_workmux_command(
         env,
         workmux_exe_path,
@@ -125,7 +102,6 @@ def test_status_filter_by_worktree(
     )
     parsed = json.loads(result.stdout)
     assert len(parsed) >= 1
-    # All results should be for the filtered worktree
     for entry in parsed:
         assert entry["branch"] == branch_name
 
@@ -135,21 +111,14 @@ def test_status_filter_no_match(
 ):
     """Status with a filter that matches no agents shows 'No active agents'."""
     env = mux_server
-    branch_name = "feature-status-exists"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-status-exists",
+        status="working",
     )
 
-    # Filter by a name that doesn't match any agent
     result = run_workmux_command(
         env,
         workmux_exe_path,

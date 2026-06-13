@@ -9,15 +9,13 @@ from pathlib import Path
 from .conftest import (
     MuxEnvironment,
     get_window_name,
-    poll_until,
     run_workmux_add,
     run_workmux_command,
     wait_for_pane_output,
     wait_for_window_ready,
     write_workmux_config,
 )
-
-from .test_agent_state import build_status_cmd, list_agent_state_files
+from .support.agent_state import mark_agent_state, start_active_agent
 
 
 def test_capture_error_worktree_not_found(
@@ -64,18 +62,11 @@ def test_capture_output_from_agent(
     run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
     wait_for_window_ready(env, window_name)
 
-    # Put some recognizable text in the pane
     env.send_keys(window_name, "echo CAPTURE_MARKER_12345")
     wait_for_pane_output(env, window_name, "CAPTURE_MARKER_12345")
 
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
-    )
+    mark_agent_state(env, workmux_exe_path, window_name, "working")
 
-    # Capture the pane
     result = run_workmux_command(
         env,
         workmux_exe_path,
@@ -91,21 +82,14 @@ def test_capture_strips_ansi(
 ):
     """Capture output has ANSI escape codes stripped."""
     env = mux_server
-    branch_name = "feature-capture-ansi"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-capture-ansi",
+        status="working",
     )
 
-    # Capture the pane - output should not contain ANSI escape sequences
     result = run_workmux_command(
         env,
         workmux_exe_path,
@@ -113,7 +97,6 @@ def test_capture_strips_ansi(
         "capture feature-capture-ansi",
     )
     assert result.exit_code == 0
-    # The output should be clean text without escape codes
     assert "\x1b[" not in result.stdout
 
 
@@ -122,18 +105,12 @@ def test_capture_custom_line_count(
 ):
     """Capture respects the --lines flag."""
     env = mux_server
-    branch_name = "feature-capture-lines"
-    window_name = get_window_name(branch_name)
-
-    write_workmux_config(mux_repo_path, panes=[{"focus": True}])
-    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
-    wait_for_window_ready(env, window_name)
-
-    # Create real agent state
-    status_cmd = build_status_cmd(env, workmux_exe_path, "working")
-    env.send_keys(window_name, status_cmd)
-    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
-        "Agent state file not created"
+    start_active_agent(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "feature-capture-lines",
+        status="working",
     )
 
     result = run_workmux_command(

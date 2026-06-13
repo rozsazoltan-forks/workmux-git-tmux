@@ -12,78 +12,23 @@ through the dashboard TUI, which calls load_reconciled_agents(). These tests
 verify the state files have the fields needed for reconciliation to work.
 """
 
-import json
-import shlex
 from pathlib import Path
-
 
 from .conftest import (
     MuxEnvironment,
     get_window_name,
-    make_env_script,
     poll_until,
     run_workmux_add,
     wait_for_window_ready,
     write_workmux_config,
 )
-
-
-def get_state_dir(env: MuxEnvironment) -> Path:
-    """Get the workmux state directory for this test environment."""
-    return Path(env.env["XDG_STATE_HOME"]) / "workmux"
-
-
-def get_agents_dir(env: MuxEnvironment) -> Path:
-    """Get the agents state directory."""
-    return get_state_dir(env) / "agents"
-
-
-def list_agent_state_files(env: MuxEnvironment) -> list[Path]:
-    """List all agent state files."""
-    agents_dir = get_agents_dir(env)
-    if not agents_dir.exists():
-        return []
-    return list(agents_dir.glob("*.json"))
-
-
-def read_agent_state(path: Path) -> dict:
-    """Read and parse an agent state file."""
-    return json.loads(path.read_text())
-
-
-def build_status_cmd(
-    env: MuxEnvironment,
-    workmux_exe: Path,
-    status: str,
-    env_vars: dict[str, str] | None = None,
-) -> str:
-    """Build a set-window-status command with proper env vars for test isolation.
-
-    The command runs inside a pane's shell, which doesn't inherit the test's
-    XDG_STATE_HOME. We need to explicitly pass it so state files go to the
-    test's isolated directory.
-
-    Returns a path to a script file (to avoid tmux send-keys line length limits).
-    """
-    command = f"{workmux_exe} set-window-status {status}"
-    script_env = {"XDG_STATE_HOME": env.env["XDG_STATE_HOME"]}
-    if env_vars:
-        script_env.update(env_vars)
-    return make_env_script(env, command, script_env)
-
-
-def build_status_cmd_with_marker(
-    env: MuxEnvironment,
-    workmux_exe: Path,
-    status: str,
-    marker_path: Path,
-    env_vars: dict[str, str] | None = None,
-) -> str:
-    command = f"{workmux_exe} set-window-status {status}; touch {shlex.quote(str(marker_path))}"
-    script_env = {"XDG_STATE_HOME": env.env["XDG_STATE_HOME"]}
-    if env_vars:
-        script_env.update(env_vars)
-    return make_env_script(env, command, script_env)
+from .support.agent_state import (
+    build_status_cmd,
+    build_status_cmd_with_marker,
+    get_agents_dir,
+    list_agent_state_files,
+    read_agent_state,
+)
 
 
 # -----------------------------------------------------------------------------
