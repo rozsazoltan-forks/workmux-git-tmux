@@ -15,7 +15,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::StatusCheck;
-use crate::agent_setup::hooks;
+use crate::agent_setup::json_config::{
+    self, EmptyJsonRoot, JsonHookInstallSpec, JsonHookUninstallSpec,
+};
 
 /// Hooks configuration embedded at compile time.
 const HOOKS_JSON: &str = include_str!("../../.codex/hooks/workmux-status.json");
@@ -45,19 +47,11 @@ pub fn check() -> Result<StatusCheck> {
         return Ok(StatusCheck::NotInstalled);
     };
 
-    if !path.exists() {
-        return Ok(StatusCheck::NotInstalled);
-    }
-
-    let content = fs::read_to_string(&path).context("Failed to read ~/.codex/hooks.json")?;
-    let config: Value =
-        serde_json::from_str(&content).context("~/.codex/hooks.json is not valid JSON")?;
-
-    if hooks::has_workmux_hooks(&config) {
-        Ok(StatusCheck::Installed)
-    } else {
-        Ok(StatusCheck::NotInstalled)
-    }
+    json_config::check_hook_file(
+        &path,
+        "Failed to read ~/.codex/hooks.json",
+        "~/.codex/hooks.json is not valid JSON",
+    )
 }
 
 /// Remove workmux hooks from Codex hooks.json.
@@ -73,42 +67,24 @@ pub fn uninstall() -> Result<String> {
 }
 
 fn uninstall_at(path: PathBuf) -> Result<String> {
-    let mut messages = Vec::new();
-
-    if path.exists() {
-        let content = fs::read_to_string(&path)?;
-        let mut config: Value = serde_json::from_str(&content)?;
-
-        let removed = hooks::remove_workmux_hooks(&mut config);
-        hooks::remove_empty_hooks_wrapper(&mut config);
-
-        if removed {
-            // If hooks object is gone (empty after removal), delete the file
-            if config.get("hooks").is_none() {
-                fs::remove_file(&path)?;
-                messages.push(format!("Removed {} (no hooks remain)", path.display()));
-            } else {
-                fs::write(&path, serde_json::to_string_pretty(&config)? + "\n")?;
-                messages.push(format!("Removed workmux hooks from {}", path.display()));
-            }
-        } else {
-            messages.push("No workmux hooks found in Codex hooks.json".to_string());
-        }
-    } else {
-        messages.push("No Codex hooks.json found".to_string());
-    }
-
-    Ok(messages.join("; "))
+    json_config::json_hook_uninstall(
+        &path,
+        &JsonHookUninstallSpec {
+            messages: json_config::JsonHookUninstallMessages {
+                file_missing: "No Codex hooks.json found",
+                not_found: "No workmux hooks found in Codex hooks.json",
+                soft_read_error: None,
+                soft_parse_error: None,
+            },
+            delete_if_no_hooks_remain: true,
+            remove_plugins: false,
+            soft_errors: false,
+        },
+    )
 }
 
-/// Load the hooks portion from the embedded config.
 fn load_hooks() -> Result<Value> {
-    let config: Value =
-        serde_json::from_str(HOOKS_JSON).expect("embedded hooks config is valid JSON");
-    config
-        .get("hooks")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("hooks config missing hooks key"))
+    json_config::hooks_from_embedded(HOOKS_JSON, "hooks config missing hooks key")
 }
 
 fn config_toml_path() -> Option<PathBuf> {
@@ -195,25 +171,17 @@ fn has_hooks_feature_key(content: &str) -> bool {
 pub fn install() -> Result<String> {
     let path = hooks_path().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    // Read existing config or start fresh
-    let mut config: Value = if path.exists() {
-        let content = fs::read_to_string(&path).context("Failed to read ~/.codex/hooks.json")?;
-        serde_json::from_str(&content).context("~/.codex/hooks.json is not valid JSON")?
-    } else {
-        // Ensure ~/.codex/ directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).context("Failed to create ~/.codex/ directory")?;
-        }
-        serde_json::json!({ "hooks": {} })
-    };
-
-    let hooks_to_add = load_hooks()?;
-
-    hooks::merge_hook_groups(&mut config, &hooks_to_add)?;
-
-    // Write back with pretty formatting
-    let output = serde_json::to_string_pretty(&config)?;
-    fs::write(&path, output + "\n").context("Failed to write ~/.codex/hooks.json")?;
+    json_config::json_hook_install(
+        &path,
+        &load_hooks()?,
+        &JsonHookInstallSpec {
+            read_context: "Failed to read ~/.codex/hooks.json",
+            parse_context: "~/.codex/hooks.json is not valid JSON",
+            write_context: "Failed to write ~/.codex/hooks.json",
+            mkdir_context: "Failed to create ~/.codex/ directory",
+            empty_root: EmptyJsonRoot::HooksObject,
+        },
+    )?;
 
     // Ensure hooks feature flag is enabled in config.toml
     let feature_msg = match ensure_hooks_feature_flag() {

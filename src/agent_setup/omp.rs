@@ -5,12 +5,12 @@
 //!
 //! Installs extension by writing `workmux-status.ts` to the extensions directory.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::StatusCheck;
+use crate::agent_setup::extension_file;
 
 /// The OMP extension source, embedded at compile time.
 const EXTENSION_SOURCE: &str = include_str!("../../.omp/extensions/workmux-status.ts");
@@ -54,15 +54,7 @@ pub fn detect() -> Option<&'static str> {
 
 /// Check if workmux extension is installed for OMP.
 pub fn check() -> Result<StatusCheck> {
-    let Some(path) = extension_path() else {
-        return Ok(StatusCheck::NotInstalled);
-    };
-
-    if path.exists() {
-        Ok(StatusCheck::Installed)
-    } else {
-        Ok(StatusCheck::NotInstalled)
-    }
+    extension_file::check_installed(extension_path().as_deref())
 }
 
 /// Install workmux extension for OMP.
@@ -71,11 +63,12 @@ pub fn install() -> Result<String> {
     let path =
         extension_path().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).context("Failed to create omp extensions directory")?;
-    }
-
-    fs::write(&path, EXTENSION_SOURCE).context("Failed to write omp extension")?;
+    extension_file::install_extension_file(
+        &path,
+        EXTENSION_SOURCE,
+        "Failed to create omp extensions directory",
+        "Failed to write omp extension",
+    )?;
 
     Ok(format!(
         "Installed extension to {}. Restart omp for it to take effect.",
@@ -94,17 +87,11 @@ pub fn uninstall() -> Result<String> {
 }
 
 fn uninstall_at(path: PathBuf) -> Result<String> {
-    if !path.exists() {
-        return Ok("No omp extension found".to_string());
+    if extension_file::remove_extension_file(&path)? {
+        Ok(format!("Removed omp extension at {}", path.display()))
+    } else {
+        Ok("No omp extension found".to_string())
     }
-    fs::remove_file(&path)?;
-    // Clean up empty extensions directory
-    if let Some(parent) = path.parent()
-        && parent.read_dir().is_ok_and(|mut it| it.next().is_none())
-    {
-        let _ = fs::remove_dir(parent);
-    }
-    Ok(format!("Removed omp extension at {}", path.display()))
 }
 
 #[cfg(test)]

@@ -5,11 +5,13 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::fs;
 use std::path::PathBuf;
 
 use super::StatusCheck;
 use crate::agent_setup::hooks;
+use crate::agent_setup::json_config::{
+    self, EmptyJsonRoot, JsonHookInstallSpec, JsonHookUninstallSpec,
+};
 
 /// Hooks extracted from `.claude-plugin/plugin.json` at compile time.
 const PLUGIN_JSON: &str = include_str!("../../.claude-plugin/plugin.json");
@@ -53,7 +55,8 @@ pub fn check() -> Result<StatusCheck> {
         return Ok(StatusCheck::NotInstalled);
     }
 
-    let content = fs::read_to_string(&path).context("Failed to read ~/.claude/settings.json")?;
+    let content =
+        std::fs::read_to_string(&path).context("Failed to read ~/.claude/settings.json")?;
 
     let settings: Value =
         serde_json::from_str(&content).context("~/.claude/settings.json is not valid JSON")?;
@@ -91,33 +94,24 @@ pub fn uninstall() -> Result<String> {
 }
 
 fn uninstall_at(path: PathBuf) -> Result<String> {
-    if !path.exists() {
-        return Ok("No Claude Code settings.json found".to_string());
-    }
-
-    let content = fs::read_to_string(&path)?;
-    let mut settings: Value = serde_json::from_str(&content)?;
-
-    let removed = hooks::remove_workmux_hooks(&mut settings);
-    let plugins_removed = hooks::remove_workmux_plugins(&mut settings);
-    hooks::remove_empty_hooks_wrapper(&mut settings);
-
-    if removed || plugins_removed {
-        fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
-        Ok(format!("Removed workmux hooks from {}", path.display()))
-    } else {
-        Ok("No workmux hooks found in Claude Code settings".to_string())
-    }
+    json_config::json_hook_uninstall(
+        &path,
+        &JsonHookUninstallSpec {
+            messages: json_config::JsonHookUninstallMessages {
+                file_missing: "No Claude Code settings.json found",
+                not_found: "No workmux hooks found in Claude Code settings",
+                soft_read_error: None,
+                soft_parse_error: None,
+            },
+            delete_if_no_hooks_remain: false,
+            remove_plugins: true,
+            soft_errors: false,
+        },
+    )
 }
 
-/// Extract the hooks object from the plugin.json manifest.
 fn load_hooks_from_plugin() -> Result<Value> {
-    let plugin: Value =
-        serde_json::from_str(PLUGIN_JSON).expect("embedded plugin.json is valid JSON");
-    plugin
-        .get("hooks")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("plugin.json missing hooks key"))
+    json_config::hooks_from_embedded(PLUGIN_JSON, "plugin.json missing hooks key")
 }
 
 /// Install workmux hooks into `~/.claude/settings.json`.
@@ -128,26 +122,17 @@ pub fn install() -> Result<String> {
     let path =
         settings_path().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    // Read existing settings or start fresh
-    let mut settings: Value = if path.exists() {
-        let content =
-            fs::read_to_string(&path).context("Failed to read ~/.claude/settings.json")?;
-        serde_json::from_str(&content).context("~/.claude/settings.json is not valid JSON")?
-    } else {
-        // Ensure ~/.claude/ directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).context("Failed to create ~/.claude/ directory")?;
-        }
-        Value::Object(serde_json::Map::new())
-    };
-
-    let hooks_to_add = load_hooks_from_plugin()?;
-
-    hooks::merge_hook_groups(&mut settings, &hooks_to_add)?;
-
-    // Write back with pretty formatting
-    let output = serde_json::to_string_pretty(&settings)?;
-    fs::write(&path, output + "\n").context("Failed to write ~/.claude/settings.json")?;
+    json_config::json_hook_install(
+        &path,
+        &load_hooks_from_plugin()?,
+        &JsonHookInstallSpec {
+            read_context: "Failed to read ~/.claude/settings.json",
+            parse_context: "~/.claude/settings.json is not valid JSON",
+            write_context: "Failed to write ~/.claude/settings.json",
+            mkdir_context: "Failed to create ~/.claude/ directory",
+            empty_root: EmptyJsonRoot::Object,
+        },
+    )?;
 
     Ok(format!("Installed hooks to {}", path.display()))
 }

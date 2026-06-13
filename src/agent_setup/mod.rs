@@ -7,8 +7,10 @@
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub mod extension_file;
 pub mod gemini;
 pub mod hooks;
+pub mod json_config;
 pub mod omp;
 pub mod opencode;
 pub mod pi;

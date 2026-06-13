@@ -3,13 +3,14 @@
 //! Detects Gemini CLI via the `~/.gemini/` directory.
 //! Installs hooks by merging into `~/.gemini/settings.json`.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::fs;
 use std::path::PathBuf;
 
 use super::StatusCheck;
-use crate::agent_setup::hooks;
+use crate::agent_setup::json_config::{
+    self, EmptyJsonRoot, JsonHookInstallSpec, JsonHookUninstallSpec,
+};
 
 /// Hooks configuration embedded at compile time.
 const HOOKS_JSON: &str = include_str!("../../resources/gemini/settings.json");
@@ -39,19 +40,11 @@ pub fn check() -> Result<StatusCheck> {
         return Ok(StatusCheck::NotInstalled);
     };
 
-    if !path.exists() {
-        return Ok(StatusCheck::NotInstalled);
-    }
-
-    let content = fs::read_to_string(&path).context("Failed to read ~/.gemini/settings.json")?;
-    let config: Value =
-        serde_json::from_str(&content).context("~/.gemini/settings.json is not valid JSON")?;
-
-    if hooks::has_workmux_hooks(&config) {
-        Ok(StatusCheck::Installed)
-    } else {
-        Ok(StatusCheck::NotInstalled)
-    }
+    json_config::check_hook_file(
+        &path,
+        "Failed to read ~/.gemini/settings.json",
+        "~/.gemini/settings.json is not valid JSON",
+    )
 }
 
 /// Remove workmux hooks from Gemini CLI settings.json.
@@ -67,37 +60,24 @@ pub fn uninstall() -> Result<String> {
 }
 
 fn uninstall_at(path: PathBuf) -> Result<String> {
-    if !path.exists() {
-        return Ok("No Gemini CLI settings.json found".to_string());
-    }
-
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(mut settings) = serde_json::from_str::<Value>(&content) {
-            let removed = hooks::remove_workmux_hooks(&mut settings);
-            hooks::remove_empty_hooks_wrapper(&mut settings);
-
-            if removed {
-                fs::write(&path, serde_json::to_string_pretty(&settings)? + "\n")?;
-                Ok(format!("Removed workmux hooks from {}", path.display()))
-            } else {
-                Ok("No workmux hooks found in Gemini CLI settings".to_string())
-            }
-        } else {
-            Ok("Could not parse Gemini CLI settings.json".to_string())
-        }
-    } else {
-        Ok("Could not read Gemini CLI settings.json".to_string())
-    }
+    json_config::json_hook_uninstall(
+        &path,
+        &JsonHookUninstallSpec {
+            messages: json_config::JsonHookUninstallMessages {
+                file_missing: "No Gemini CLI settings.json found",
+                not_found: "No workmux hooks found in Gemini CLI settings",
+                soft_read_error: Some("Could not read Gemini CLI settings.json"),
+                soft_parse_error: Some("Could not parse Gemini CLI settings.json"),
+            },
+            delete_if_no_hooks_remain: false,
+            remove_plugins: false,
+            soft_errors: true,
+        },
+    )
 }
 
-/// Load the hooks portion from the embedded config.
 fn load_hooks() -> Result<Value> {
-    let config: Value =
-        serde_json::from_str(HOOKS_JSON).expect("embedded hooks config is valid JSON");
-    config
-        .get("hooks")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("hooks config missing hooks key"))
+    json_config::hooks_from_embedded(HOOKS_JSON, "hooks config missing hooks key")
 }
 
 /// Install workmux hooks into `~/.gemini/settings.json`.
@@ -108,26 +88,17 @@ pub fn install() -> Result<String> {
     let path =
         settings_path().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    // Read existing config or start fresh
-    let mut config: Value = if path.exists() {
-        let content =
-            fs::read_to_string(&path).context("Failed to read ~/.gemini/settings.json")?;
-        serde_json::from_str(&content).context("~/.gemini/settings.json is not valid JSON")?
-    } else {
-        // Ensure ~/.gemini/ directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).context("Failed to create ~/.gemini/ directory")?;
-        }
-        serde_json::json!({ "hooks": {} })
-    };
-
-    let hooks_to_add = load_hooks()?;
-
-    hooks::merge_hook_groups(&mut config, &hooks_to_add)?;
-
-    // Write back with pretty formatting
-    let output = serde_json::to_string_pretty(&config)?;
-    fs::write(&path, output + "\n").context("Failed to write ~/.gemini/settings.json")?;
+    json_config::json_hook_install(
+        &path,
+        &load_hooks()?,
+        &JsonHookInstallSpec {
+            read_context: "Failed to read ~/.gemini/settings.json",
+            parse_context: "~/.gemini/settings.json is not valid JSON",
+            write_context: "Failed to write ~/.gemini/settings.json",
+            mkdir_context: "Failed to create ~/.gemini/ directory",
+            empty_root: EmptyJsonRoot::HooksObject,
+        },
+    )?;
 
     Ok("Installed hooks to ~/.gemini/settings.json".to_string())
 }
