@@ -15,10 +15,37 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 use crate::git::GitStatus;
 use crate::github::PrSummary;
 use crate::nerdfont;
+use crate::nerdfont::GitIcons;
 use crate::ui::pr_status::{PrStatusOptions, format_pr_details as shared_format_pr_details};
 
 use super::super::spinner::SPINNER_FRAMES;
 use super::theme::ThemePalette;
+
+/// Add diff icon and uncommitted (+N/-N) spans. Caller is responsible for
+/// the leading separator if needed.
+fn add_uncommitted_spans(
+    spans: &mut Vec<(String, Style)>,
+    status: &GitStatus,
+    icons: &GitIcons,
+    palette: &ThemePalette,
+) {
+    spans.push((icons.diff.to_string(), Style::default().fg(palette.accent)));
+
+    if status.uncommitted_added > 0 {
+        spans.push((" ".to_string(), Style::default()));
+        spans.push((
+            format!("+{}", status.uncommitted_added),
+            Style::default().fg(palette.success),
+        ));
+    }
+    if status.uncommitted_removed > 0 {
+        spans.push((" ".to_string(), Style::default()));
+        spans.push((
+            format!("-{}", status.uncommitted_removed),
+            Style::default().fg(palette.danger),
+        ));
+    }
+}
 
 /// Format git status for the Git column: base branch, diff stats, then indicators
 /// Format: "→branch +N -M 󰏫 +X -Y 󰀪 ↑A ↓B"
@@ -67,22 +94,7 @@ pub fn format_git_status(
             if !spans.is_empty() {
                 spans.push((" ".to_string(), Style::default()));
             }
-            spans.push((icons.diff.to_string(), Style::default().fg(palette.accent)));
-
-            if status.uncommitted_added > 0 {
-                spans.push((" ".to_string(), Style::default()));
-                spans.push((
-                    format!("+{}", status.uncommitted_added),
-                    Style::default().fg(palette.success),
-                ));
-            }
-            if status.uncommitted_removed > 0 {
-                spans.push((" ".to_string(), Style::default()));
-                spans.push((
-                    format!("-{}", status.uncommitted_removed),
-                    Style::default().fg(palette.danger),
-                ));
-            }
+            add_uncommitted_spans(&mut spans, status, &icons, palette);
         } else {
             // Either clean or mixed - show dim branch totals
             if status.lines_added > 0 {
@@ -113,22 +125,7 @@ pub fn format_git_status(
                 if !spans.is_empty() {
                     spans.push((" ".to_string(), Style::default()));
                 }
-                spans.push((icons.diff.to_string(), Style::default().fg(palette.accent)));
-
-                if status.uncommitted_added > 0 {
-                    spans.push((" ".to_string(), Style::default()));
-                    spans.push((
-                        format!("+{}", status.uncommitted_added),
-                        Style::default().fg(palette.success),
-                    ));
-                }
-                if status.uncommitted_removed > 0 {
-                    spans.push((" ".to_string(), Style::default()));
-                    spans.push((
-                        format!("-{}", status.uncommitted_removed),
-                        Style::default().fg(palette.danger),
-                    ));
-                }
+                add_uncommitted_spans(&mut spans, status, &icons, palette);
             }
         }
 
