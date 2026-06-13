@@ -368,12 +368,13 @@ fn handle_terminal_event(
             crossterm::event::KeyCode::Esc => app.pending_command_palette = None,
             crossterm::event::KeyCode::Enter => {
                 if let Some(palette) = app.pending_command_palette.take()
-                    && let Some(action) = palette.selected_action() {
-                        let refreshed = apply_action(app, action);
-                        if refreshed {
-                            *last_preview_refresh = std::time::Instant::now();
-                        }
+                    && let Some(action) = palette.selected_action()
+                {
+                    let refreshed = apply_action(app, action);
+                    if refreshed {
+                        *last_preview_refresh = std::time::Instant::now();
                     }
+                }
             }
             crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
                 if !key
