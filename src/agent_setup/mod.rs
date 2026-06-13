@@ -18,7 +18,9 @@ use console::style;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+
+use crate::ui::confirm::{self, ConfirmDefault};
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 /// An agent that supports status tracking.
@@ -278,30 +280,6 @@ pub(crate) fn print_description(prefix: &str) {
     );
 }
 
-fn confirm_install() -> Result<bool> {
-    let prompt = format!(
-        "  Install status tracking hooks? {}{}{} ",
-        style("[").bold().cyan(),
-        style("Y/n").bold(),
-        style("]").bold().cyan(),
-    );
-
-    loop {
-        print!("{}", prompt);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let answer = input.trim().to_lowercase();
-
-        match answer.as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => println!("    {}", style("Please enter y or n").dim()),
-        }
-    }
-}
-
 fn print_install_result(agent: Agent, result: &Result<String>) {
     match result {
         Ok(msg) => println!("  {} {}", style("✔").green(), msg),
@@ -365,7 +343,7 @@ pub fn prompt_wizard() -> Result<()> {
         print_description(&dim_str);
         println!("{}", dim);
 
-        if confirm_install()? {
+        if confirm::confirm("Install status tracking hooks?", ConfirmDefault::Yes)? {
             install_agents(&needs_hooks);
         } else {
             let agents: Vec<_> = needs_hooks.iter().map(|c| c.agent).collect();
@@ -404,7 +382,7 @@ pub fn prompt_wizard() -> Result<()> {
             );
             println!("{}", dim);
 
-            if confirm_install_skills()? {
+            if confirm::confirm("Install skills?", ConfirmDefault::Yes)? {
                 for agent in &skill_agents {
                     match crate::skills::install_skills(*agent) {
                         Ok(msg) => println!("  {}", msg),
@@ -419,30 +397,6 @@ pub fn prompt_wizard() -> Result<()> {
 
     println!();
     Ok(())
-}
-
-fn confirm_install_skills() -> Result<bool> {
-    let prompt = format!(
-        "  Install skills? {}{}{} ",
-        style("[").bold().cyan(),
-        style("Y/n").bold(),
-        style("]").bold().cyan(),
-    );
-
-    loop {
-        print!("{}", prompt);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let answer = input.trim().to_lowercase();
-
-        match answer.as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => println!("    {}", style("Please enter y or n").dim()),
-        }
-    }
 }
 
 #[cfg(test)]

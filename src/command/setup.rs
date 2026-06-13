@@ -1,9 +1,10 @@
 use anyhow::Result;
 use console::style;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 
 use crate::agent_setup::{self, Agent, StatusCheck};
 use crate::skills;
+use crate::ui::confirm::{self, ConfirmDefault};
 
 pub fn run(hooks_only: bool, skills_only: bool) -> Result<()> {
     if !io::stdin().is_terminal() {
@@ -83,7 +84,7 @@ fn run_hooks_setup(checks: &[agent_setup::AgentCheck]) -> Result<()> {
     agent_setup::print_description("");
     println!();
 
-    if confirm("Install status tracking hooks?")? {
+    if confirm::confirm("Install status tracking hooks?", ConfirmDefault::Yes)? {
         let mut any_failed = false;
         for check in &needs_setup {
             match agent_setup::install(check.agent) {
@@ -137,7 +138,7 @@ fn run_skills_setup(checks: &[agent_setup::AgentCheck]) -> Result<()> {
     );
     println!();
 
-    if confirm("Install bundled skills?")? {
+    if confirm::confirm("Install bundled skills?", ConfirmDefault::Yes)? {
         let mut any_failed = false;
         for agent in &skill_agents {
             match skills::install_skills(*agent) {
@@ -155,29 +156,4 @@ fn run_skills_setup(checks: &[agent_setup::AgentCheck]) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn confirm(message: &str) -> Result<bool> {
-    let prompt = format!(
-        "  {} {}{}{} ",
-        message,
-        style("[").bold().cyan(),
-        style("Y/n").bold(),
-        style("]").bold().cyan(),
-    );
-
-    loop {
-        print!("{}", prompt);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let answer = input.trim().to_lowercase();
-
-        match answer.as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => println!("    {}", style("Please enter y or n").dim()),
-        }
-    }
 }
