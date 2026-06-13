@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, HashSet};
 use crate::agent_display::strip_oc_title_prefix;
 
 use super::super::app::{App, DashboardTab};
-use super::super::spinner::SPINNER_FRAMES;
 use super::format;
 use super::format::{format_git_status, format_pr_status, truncate};
 use super::worktree::{render_worktree_preview, render_worktree_table};
@@ -159,33 +158,10 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         .is_git_fetching
         .load(std::sync::atomic::Ordering::Relaxed);
 
-    // Build header with spinner in Git column when fetching
-    let git_header = if is_git_fetching {
-        let spinner = SPINNER_FRAMES[app.spinner_frame as usize % SPINNER_FRAMES.len()];
-        Line::from(vec![
-            Span::styled("Git ", Style::default().fg(app.palette.header).bold()),
-            Span::styled(spinner.to_string(), Style::default().fg(app.palette.dimmed)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            "Git",
-            Style::default().fg(app.palette.header).bold(),
-        ))
-    };
-
-    // Build PR header with spinner when fetching
-    let pr_header = if app.is_pr_fetching() {
-        let spinner = SPINNER_FRAMES[app.spinner_frame as usize % SPINNER_FRAMES.len()];
-        Line::from(vec![
-            Span::styled("PR ", Style::default().fg(app.palette.header).bold()),
-            Span::styled(spinner.to_string(), Style::default().fg(app.palette.dimmed)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            "PR",
-            Style::default().fg(app.palette.header).bold(),
-        ))
-    };
+    let git_header =
+        format::build_column_header("Git", is_git_fetching, app.spinner_frame, &app.palette);
+    let pr_header =
+        format::build_column_header("PR", app.is_pr_fetching(), app.spinner_frame, &app.palette);
 
     let header_style = Style::default().fg(app.palette.header).bold();
     let mut header_cells = vec![
@@ -317,23 +293,13 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     // Calculate max project name width (with padding, capped)
-    let max_project_width = row_data
-        .iter()
-        .map(|(_, project, _, _, _, _, _, _, _, _, _, _)| project.len())
-        .max()
-        .unwrap_or(5)
-        .clamp(5, 20) // min 5, max 20
-        + 2; // padding
+    let project_names: Vec<String> = row_data.iter().map(|r| r.1.clone()).collect();
+    let max_project_width = format::calc_column_width(&project_names, 5, 20, 2);
 
     // Calculate max worktree name width (with padding, capped)
     // Use at least 8 to fit the "Worktree" header, at most 25 to keep layout compact
-    let max_worktree_width = row_data
-        .iter()
-        .map(|(_, _, worktree_display, _, _, _, _, _, _, _, _, _)| worktree_display.len())
-        .max()
-        .unwrap_or(8)
-        .clamp(8, 25)
-        + 1; // padding
+    let worktree_names: Vec<String> = row_data.iter().map(|r| r.2.clone()).collect();
+    let max_worktree_width = format::calc_column_width(&worktree_names, 8, 25, 1);
 
     // Calculate max git status width (sum of all span character counts)
     // Use chars().count() instead of len() because Nerd Font icons are multi-byte
@@ -386,13 +352,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 duration,
                 title,
             )| {
-                let worktree_style = if is_current {
-                    Style::default().fg(app.palette.current_worktree_fg)
-                } else if is_main {
-                    Style::default().fg(app.palette.dimmed)
-                } else {
-                    Style::default()
-                };
+                let worktree_style = format::make_row_style(is_current, is_main, &app.palette);
 
                 // Worktree name with dimmed pane suffix
                 let worktree_line = if worktree_suffix.is_empty() {
@@ -405,12 +365,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 };
 
                 // Convert git spans to a Line
-                let git_line = Line::from(
-                    git_spans
-                        .into_iter()
-                        .map(|(text, style)| Span::styled(text, style))
-                        .collect::<Vec<_>>(),
-                );
+                let git_line = format::spans_to_line(git_spans);
 
                 let mut cells = vec![
                     Cell::from(jump_key).style(Style::default().fg(app.palette.keycap)),
@@ -421,21 +376,11 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
 
                 // Add PR cell if column is shown
                 if let Some(pr_spans) = pr_spans {
-                    let pr_line = Line::from(
-                        pr_spans
-                            .into_iter()
-                            .map(|(text, style)| Span::styled(text, style))
-                            .collect::<Vec<_>>(),
-                    );
+                    let pr_line = format::spans_to_line(pr_spans);
                     cells.push(Cell::from(pr_line));
                 }
 
-                let status_line = Line::from(
-                    status_spans
-                        .into_iter()
-                        .map(|(text, style)| Span::styled(text, style))
-                        .collect::<Vec<_>>(),
-                );
+                let status_line = format::spans_to_line(status_spans);
                 cells.extend(vec![
                     Cell::from(status_line),
                     Cell::from(duration),
@@ -456,8 +401,8 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     // Build column constraints conditionally based on whether PR column is shown
     let mut constraints = vec![
         Constraint::Length(2),                         // #: jump key
-        Constraint::Length(max_project_width as u16),  // Project: auto-sized
-        Constraint::Length(max_worktree_width as u16), // Worktree: auto-sized
+        Constraint::Length(max_project_width),  // Project: auto-sized
+        Constraint::Length(max_worktree_width), // Worktree: auto-sized
         Constraint::Length(max_git_width as u16),      // Git: auto-sized
     ];
 

@@ -1,6 +1,7 @@
 //! Formatting helpers for dashboard UI rendering.
 
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 /// Truncate a string to max_len characters, appending ellipsis if truncated.
 pub fn truncate(s: &str, max_len: usize) -> String {
@@ -204,4 +205,60 @@ pub fn format_pr_details(
     palette: &ThemePalette,
 ) -> Vec<ratatui::text::Span<'static>> {
     shared_format_pr_details(pr, spinner_frame, palette)
+}
+
+/// Build a column header with optional spinner when data is being fetched.
+pub fn build_column_header(
+    name: &str,
+    is_fetching: bool,
+    spinner_frame: u8,
+    palette: &ThemePalette,
+) -> Line<'static> {
+    if is_fetching {
+        let frame = SPINNER_FRAMES[spinner_frame as usize % SPINNER_FRAMES.len()];
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", name),
+                Style::default().fg(palette.header).bold(),
+            ),
+            Span::styled(frame.to_string(), Style::default().fg(palette.dimmed)),
+        ])
+    } else {
+        Line::from(Span::styled(
+            name.to_string(),
+            Style::default().fg(palette.header).bold(),
+        ))
+    }
+}
+
+/// Convert vec of (string, style) pairs into a ratatui Line for table cell rendering.
+pub fn spans_to_line(spans: Vec<(String, Style)>) -> Line<'static> {
+    Line::from(
+        spans
+            .into_iter()
+            .map(|(text, style)| Span::styled(text, style))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Calculate column width from string items with min/max clamping.
+pub fn calc_column_width(items: &[String], min: usize, max: usize, padding: usize) -> u16 {
+    items
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(min)
+        .clamp(min, max)
+        .saturating_add(padding) as u16
+}
+
+/// Create a style for a table row based on whether it's the current or main worktree.
+pub fn make_row_style(is_current: bool, is_main: bool, palette: &ThemePalette) -> Style {
+    if is_current {
+        Style::default().fg(palette.current_worktree_fg)
+    } else if is_main {
+        Style::default().fg(palette.dimmed)
+    } else {
+        Style::default()
+    }
 }

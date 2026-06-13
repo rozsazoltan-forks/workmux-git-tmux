@@ -12,6 +12,7 @@ use super::super::agent;
 use super::super::ansi;
 use super::super::app::App;
 use super::super::spinner::SPINNER_FRAMES;
+use super::format;
 use super::format::{format_git_status, format_pr_status, truncate};
 
 /// Render the worktree table in the given area.
@@ -32,19 +33,8 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
         .is_git_fetching
         .load(std::sync::atomic::Ordering::Relaxed);
 
-    // Build Git header with spinner when fetching
-    let git_header = if is_git_fetching {
-        let spinner = SPINNER_FRAMES[app.spinner_frame as usize % SPINNER_FRAMES.len()];
-        Line::from(vec![
-            Span::styled("Git ", Style::default().fg(app.palette.header).bold()),
-            Span::styled(spinner.to_string(), Style::default().fg(app.palette.dimmed)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            "Git",
-            Style::default().fg(app.palette.header).bold(),
-        ))
-    };
+    let git_header =
+        format::build_column_header("Git", is_git_fetching, app.spinner_frame, &app.palette);
 
     let header_style = Style::default().fg(app.palette.header).bold();
     let mut header_cells = vec![
@@ -55,18 +45,8 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     if show_pr_column {
         let is_pr_fetching = app.is_pr_fetching();
-        let pr_header = if is_pr_fetching {
-            let spinner = SPINNER_FRAMES[app.spinner_frame as usize % SPINNER_FRAMES.len()];
-            Line::from(vec![
-                Span::styled("PR ", Style::default().fg(app.palette.header).bold()),
-                Span::styled(spinner.to_string(), Style::default().fg(app.palette.dimmed)),
-            ])
-        } else {
-            Line::from(Span::styled(
-                "PR",
-                Style::default().fg(app.palette.header).bold(),
-            ))
-        };
+        let pr_header =
+            format::build_column_header("PR", is_pr_fetching, app.spinner_frame, &app.palette);
         header_cells.push(Cell::from(pr_header));
     }
     header_cells.extend([
@@ -198,21 +178,11 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     // Calculate dynamic column widths
-    let max_project_width = row_data
-        .iter()
-        .map(|(_, p, _, _, _, _, _, _, _, _)| p.len())
-        .max()
-        .unwrap_or(5)
-        .clamp(5, 20)
-        + 2;
+    let project_names: Vec<String> = row_data.iter().map(|r| r.1.clone()).collect();
+    let max_project_width = format::calc_column_width(&project_names, 5, 20, 2);
 
-    let max_worktree_width = row_data
-        .iter()
-        .map(|(_, _, w, _, _, _, _, _, _, _)| w.len())
-        .max()
-        .unwrap_or(8)
-        .clamp(8, 25)
-        + 1;
+    let worktree_names: Vec<String> = row_data.iter().map(|r| r.2.clone()).collect();
+    let max_worktree_width = format::calc_column_width(&worktree_names, 8, 25, 1);
 
     let max_git_width = row_data
         .iter()
@@ -259,20 +229,8 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
                 has_mux_window,
                 age,
             )| {
-                let worktree_style = if is_current {
-                    Style::default().fg(app.palette.current_worktree_fg)
-                } else if is_main {
-                    Style::default().fg(app.palette.dimmed)
-                } else {
-                    Style::default()
-                };
-
-                let git_line = Line::from(
-                    git_spans
-                        .into_iter()
-                        .map(|(text, style)| Span::styled(text, style))
-                        .collect::<Vec<_>>(),
-                );
+                let worktree_style = format::make_row_style(is_current, is_main, &app.palette);
+                let git_line = format::spans_to_line(git_spans);
 
                 let mux_cell = if has_mux_window {
                     Cell::from("\u{25cf}").style(Style::default().fg(app.palette.success))
@@ -280,12 +238,7 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from("-").style(Style::default().fg(app.palette.dimmed))
                 };
 
-                let agent_line = Line::from(
-                    agent_spans
-                        .into_iter()
-                        .map(|(text, style)| Span::styled(text, style))
-                        .collect::<Vec<_>>(),
-                );
+                let agent_line = format::spans_to_line(agent_spans);
 
                 let age_cell = Cell::from(age.unwrap_or_default())
                     .style(Style::default().fg(app.palette.dimmed));
@@ -298,12 +251,7 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
                 ];
 
                 if let Some(pr_spans) = pr_spans {
-                    let pr_line = Line::from(
-                        pr_spans
-                            .into_iter()
-                            .map(|(text, style)| Span::styled(text, style))
-                            .collect::<Vec<_>>(),
-                    );
+                    let pr_line = format::spans_to_line(pr_spans);
                     cells.push(Cell::from(pr_line));
                 }
 
@@ -322,8 +270,8 @@ pub fn render_worktree_table(f: &mut Frame, app: &mut App, area: Rect) {
 
     let mut constraints = vec![
         Constraint::Length(2),                         // #
-        Constraint::Length(max_project_width as u16),  // Project
-        Constraint::Length(max_worktree_width as u16), // Worktree (+ branch when different)
+        Constraint::Length(max_project_width),  // Project
+        Constraint::Length(max_worktree_width), // Worktree (+ branch when different)
         Constraint::Length(max_git_width as u16),      // Git
     ];
     if show_pr_column {
