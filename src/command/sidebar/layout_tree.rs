@@ -524,6 +524,23 @@ pub(super) fn reflow_after_sidebar_add_to_window_extent(
 
 // ── Sidebar removal ────────────────────────────────────────────
 
+fn prune_split_children(
+    rect: Rect,
+    children: Vec<LayoutNode>,
+    target: u32,
+    rebuild: impl FnOnce(Rect, Vec<LayoutNode>) -> LayoutNode,
+) -> Option<LayoutNode> {
+    let mut children: Vec<_> = children
+        .into_iter()
+        .filter_map(|child| prune_pane(child, target))
+        .collect();
+    match children.len() {
+        0 => None,
+        1 => Some(children.remove(0)),
+        _ => Some(rebuild(rect, children)),
+    }
+}
+
 /// Remove a pane from the layout tree by its numeric ID.
 /// Collapses any split that ends up with a single child.
 fn prune_pane(node: LayoutNode, target: u32) -> Option<LayoutNode> {
@@ -531,26 +548,14 @@ fn prune_pane(node: LayoutNode, target: u32) -> Option<LayoutNode> {
         LayoutNode::Leaf { pane_id, .. } if pane_id == target => None,
         leaf @ LayoutNode::Leaf { .. } => Some(leaf),
         LayoutNode::HSplit { rect, children } => {
-            let mut children: Vec<_> = children
-                .into_iter()
-                .filter_map(|child| prune_pane(child, target))
-                .collect();
-            match children.len() {
-                0 => None,
-                1 => Some(children.remove(0)),
-                _ => Some(LayoutNode::HSplit { rect, children }),
-            }
+            prune_split_children(rect, children, target, |rect, children| {
+                LayoutNode::HSplit { rect, children }
+            })
         }
         LayoutNode::VSplit { rect, children } => {
-            let mut children: Vec<_> = children
-                .into_iter()
-                .filter_map(|child| prune_pane(child, target))
-                .collect();
-            match children.len() {
-                0 => None,
-                1 => Some(children.remove(0)),
-                _ => Some(LayoutNode::VSplit { rect, children }),
-            }
+            prune_split_children(rect, children, target, |rect, children| {
+                LayoutNode::VSplit { rect, children }
+            })
         }
     }
 }

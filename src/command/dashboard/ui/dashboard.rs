@@ -524,7 +524,7 @@ fn render_preview(f: &mut Frame, app: &mut App, area: Rect) {
 // ── Footer rendering ────────────────────────────────────────────
 
 /// Filter mode footer
-fn render_footer_filter<'a>(app: &'a App) -> Paragraph<'a> {
+fn render_footer_filter_mode<'a>(app: &'a App, filter_text: &'a str) -> Paragraph<'a> {
     Paragraph::new(Line::from(vec![
         Span::styled(
             "  /",
@@ -532,7 +532,7 @@ fn render_footer_filter<'a>(app: &'a App) -> Paragraph<'a> {
                 .fg(app.palette.keycap)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(app.filter_text.as_str()),
+        Span::raw(filter_text),
         Span::styled("_", Style::default().fg(app.palette.keycap)),
         Span::raw("  "),
         Span::styled("Enter", Style::default().fg(app.palette.dimmed)),
@@ -540,6 +540,10 @@ fn render_footer_filter<'a>(app: &'a App) -> Paragraph<'a> {
         Span::styled("Esc", Style::default().fg(app.palette.dimmed)),
         Span::raw(" clear"),
     ]))
+}
+
+fn render_footer_filter<'a>(app: &'a App) -> Paragraph<'a> {
+    render_footer_filter_mode(app, app.filter_text.as_str())
 }
 
 /// Input mode footer
@@ -595,6 +599,27 @@ fn render_right_help(f: &mut Frame, area: Rect, dimmed: Style, bold_text: Style)
     f.render_widget(Paragraph::new(right), cols[1]);
 }
 
+fn render_pinned_footer(
+    f: &mut Frame,
+    area: Rect,
+    items: &[Vec<Span<'static>>],
+    dimmed: Style,
+    bold_text: Style,
+    pipe_style: Style,
+) {
+    let mut s: Vec<Span<'static>> = vec![Span::raw("  ")];
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            s.push(footer_pipe(pipe_style));
+        }
+        s.extend(item.iter().cloned());
+    }
+
+    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(7)]).split(area);
+    f.render_widget(Paragraph::new(Line::from(s)), cols[0]);
+    render_right_help(f, area, dimmed, bold_text);
+}
+
 /// Normal mode footer with right-pinned help
 fn render_footer_normal(f: &mut Frame, app: &App, area: Rect) {
     let p = &app.palette;
@@ -610,77 +635,43 @@ fn render_footer_normal(f: &mut Frame, app: &App, area: Rect) {
     let scope_active = scope != "all";
     let stale_active = stale == "hidden";
 
-    let mut s: Vec<Span<'static>> = vec![Span::raw("  ")];
-    s.extend(footer_cmd("i", "Input", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("d", "Diff", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("o", "PR", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("1-9", "Jump", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_toggle(
-        "s",
-        "Sort",
-        sort,
-        true,
-        dimmed,
-        bold_text,
-        active_style,
-    ));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_toggle(
-        "F",
-        "Scope",
-        scope,
-        scope_active,
-        dimmed,
-        bold_text,
-        active_style,
-    ));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_toggle(
-        "f",
-        "Stale",
-        stale,
-        stale_active,
-        dimmed,
-        bold_text,
-        active_style,
-    ));
+    let mut items: Vec<Vec<Span<'static>>> = vec![
+        footer_cmd("i", "Input", dimmed, bold_text),
+        footer_cmd("d", "Diff", dimmed, bold_text),
+        footer_cmd("o", "PR", dimmed, bold_text),
+        footer_cmd("1-9", "Jump", dimmed, bold_text),
+        footer_toggle("s", "Sort", sort, true, dimmed, bold_text, active_style),
+        footer_toggle(
+            "F",
+            "Scope",
+            scope,
+            scope_active,
+            dimmed,
+            bold_text,
+            active_style,
+        ),
+        footer_toggle(
+            "f",
+            "Stale",
+            stale,
+            stale_active,
+            dimmed,
+            bold_text,
+            active_style,
+        ),
+    ];
     if !app.filter_text.is_empty() {
-        s.push(footer_pipe(pipe_style));
-        s.extend(footer_cmd("/", &app.filter_text, dimmed, bold_text));
+        items.push(footer_cmd("/", &app.filter_text, dimmed, bold_text));
     }
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("Tab", "Worktrees", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("q", "Quit", dimmed, bold_text));
+    items.push(footer_cmd("Tab", "Worktrees", dimmed, bold_text));
+    items.push(footer_cmd("q", "Quit", dimmed, bold_text));
 
-    // Split footer: left commands, right-pinned help
-    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(7)]).split(area);
-
-    f.render_widget(Paragraph::new(Line::from(s)), cols[0]);
-    render_right_help(f, area, dimmed, bold_text);
+    render_pinned_footer(f, area, &items, dimmed, bold_text, pipe_style);
 }
 
 /// Worktree filter mode footer
 fn render_worktree_footer_filter<'a>(app: &'a App) -> Paragraph<'a> {
-    Paragraph::new(Line::from(vec![
-        Span::styled(
-            "  /",
-            Style::default()
-                .fg(app.palette.keycap)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(app.worktree_filter_text.as_str()),
-        Span::styled("_", Style::default().fg(app.palette.keycap)),
-        Span::raw("  "),
-        Span::styled("Enter", Style::default().fg(app.palette.dimmed)),
-        Span::raw(" accept  "),
-        Span::styled("Esc", Style::default().fg(app.palette.dimmed)),
-        Span::raw(" clear"),
-    ]))
+    render_footer_filter_mode(app, app.worktree_filter_text.as_str())
 }
 
 /// Worktree normal mode footer
@@ -694,47 +685,26 @@ fn render_worktree_footer_normal(f: &mut Frame, app: &App, area: Rect) {
 
     let sort = app.worktree_sort_mode.label();
 
-    let mut s: Vec<Span<'static>> = vec![Span::raw("  ")];
-    s.extend(footer_cmd("a", "Add", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("r", "Remove", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("R", "Sweep", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("c", "Close", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("o", "PR", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("1-9", "Jump", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_toggle(
-        "s",
-        "Sort",
-        sort,
-        true,
-        dimmed,
-        bold_text,
-        active_style,
-    ));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("p", "Project", dimmed, bold_text));
+    let mut items: Vec<Vec<Span<'static>>> = vec![
+        footer_cmd("a", "Add", dimmed, bold_text),
+        footer_cmd("r", "Remove", dimmed, bold_text),
+        footer_cmd("R", "Sweep", dimmed, bold_text),
+        footer_cmd("c", "Close", dimmed, bold_text),
+        footer_cmd("o", "PR", dimmed, bold_text),
+        footer_cmd("1-9", "Jump", dimmed, bold_text),
+        footer_toggle("s", "Sort", sort, true, dimmed, bold_text, active_style),
+        footer_cmd("p", "Project", dimmed, bold_text),
+    ];
     if !app.worktree_filter_text.is_empty() {
-        s.push(footer_pipe(pipe_style));
-        s.extend(footer_cmd(
+        items.push(footer_cmd(
             "/",
             &app.worktree_filter_text,
             dimmed,
             bold_text,
         ));
     }
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("Tab", "Agents", dimmed, bold_text));
-    s.push(footer_pipe(pipe_style));
-    s.extend(footer_cmd("q", "Quit", dimmed, bold_text));
+    items.push(footer_cmd("Tab", "Agents", dimmed, bold_text));
+    items.push(footer_cmd("q", "Quit", dimmed, bold_text));
 
-    // Split footer: left commands, right-pinned help
-    let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Length(7)]).split(area);
-
-    f.render_widget(Paragraph::new(Line::from(s)), cols[0]);
-    render_right_help(f, area, dimmed, bold_text);
+    render_pinned_footer(f, area, &items, dimmed, bold_text, pipe_style);
 }

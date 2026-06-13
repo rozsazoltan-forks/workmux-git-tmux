@@ -478,6 +478,44 @@ mod tests {
         format!("{}:443", s).parse().unwrap()
     }
 
+    struct SpawnedProxy {
+        port: u16,
+        token: String,
+        _handle: ProxyHandle,
+    }
+
+    fn spawn_test_proxy(rules: &[AllowedDomainRule]) -> SpawnedProxy {
+        let proxy = NetworkProxy::bind(rules).unwrap();
+        let port = proxy.port();
+        let token = proxy.token().to_string();
+        let handle = proxy.spawn();
+        std::thread::sleep(Duration::from_millis(50));
+        SpawnedProxy {
+            port,
+            token,
+            _handle: handle,
+        }
+    }
+
+    fn proxy_auth(token: &str) -> String {
+        format!("Basic {}", base64_encode(&format!("workmux:{token}")))
+    }
+
+    fn proxy_connect_request(host_port: &str, auth_header: &str, auth: &str) -> String {
+        format!("CONNECT {host_port} HTTP/1.1\r\n{auth_header}: {auth}\r\n\r\n")
+    }
+
+    fn proxy_request_status_line(port: u16, request: &str) -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        stream.flush().unwrap();
+
+        let mut response = String::new();
+        let mut reader = BufReader::new(&stream);
+        reader.read_line(&mut response).unwrap();
+        response
+    }
+
     // ── domain_matches tests ────────────────────────────────────────────
 
     #[test]
@@ -693,71 +731,33 @@ mod tests {
 
     #[test]
     fn proxy_rejects_missing_auth() {
-        let proxy = NetworkProxy::bind(&[rule("example.com", false)]).unwrap();
-        let port = proxy.port();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream
-            .write_all(b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
-            .unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let proxy = spawn_test_proxy(&[rule("example.com", false)]);
+        let response =
+            proxy_request_status_line(proxy.port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n");
         assert!(response.contains("407"));
     }
 
     #[test]
     fn proxy_rejects_wrong_auth() {
-        let proxy = NetworkProxy::bind(&[rule("example.com", false)]).unwrap();
-        let port = proxy.port();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        let auth = format!("Basic {}", base64_encode("workmux:wrong-token"));
-        let request = format!(
-            "CONNECT example.com:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
-            auth
+        let proxy = spawn_test_proxy(&[rule("example.com", false)]);
+        let request = proxy_connect_request(
+            "example.com:443",
+            "Proxy-Authorization",
+            &proxy_auth("wrong-token"),
         );
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let response = proxy_request_status_line(proxy.port, &request);
         assert!(response.contains("407"));
     }
 
     #[test]
     fn proxy_accepts_lowercase_auth_header() {
-        let proxy = NetworkProxy::bind(&[rule("example.com", false)]).unwrap();
-        let port = proxy.port();
-        let token = proxy.token().to_string();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        // Use lowercase "proxy-authorization" like hyper/reqwest do
-        let auth = format!("Basic {}", base64_encode(&format!("workmux:{}", token)));
-        let request = format!(
-            "CONNECT example.com:443 HTTP/1.1\r\nproxy-authorization: {}\r\n\r\n",
-            auth
+        let proxy = spawn_test_proxy(&[rule("example.com", false)]);
+        let request = proxy_connect_request(
+            "example.com:443",
+            "proxy-authorization",
+            &proxy_auth(&proxy.token),
         );
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let response = proxy_request_status_line(proxy.port, &request);
         // Should NOT be 407 -- lowercase header must be accepted
         assert!(
             !response.contains("407"),
@@ -768,51 +768,25 @@ mod tests {
 
     #[test]
     fn proxy_rejects_non_443_port() {
-        let proxy = NetworkProxy::bind(&[rule("example.com", false)]).unwrap();
-        let port = proxy.port();
-        let token = proxy.token().to_string();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        let auth = format!("Basic {}", base64_encode(&format!("workmux:{}", token)));
-        let request = format!(
-            "CONNECT example.com:80 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
-            auth
+        let proxy = spawn_test_proxy(&[rule("example.com", false)]);
+        let request = proxy_connect_request(
+            "example.com:80",
+            "Proxy-Authorization",
+            &proxy_auth(&proxy.token),
         );
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let response = proxy_request_status_line(proxy.port, &request);
         assert!(response.contains("403"));
     }
 
     #[test]
     fn proxy_rejects_unlisted_domain() {
-        let proxy = NetworkProxy::bind(&[rule("allowed.com", false)]).unwrap();
-        let port = proxy.port();
-        let token = proxy.token().to_string();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        let auth = format!("Basic {}", base64_encode(&format!("workmux:{}", token)));
-        let request = format!(
-            "CONNECT denied.com:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
-            auth
+        let proxy = spawn_test_proxy(&[rule("allowed.com", false)]);
+        let request = proxy_connect_request(
+            "denied.com:443",
+            "Proxy-Authorization",
+            &proxy_auth(&proxy.token),
         );
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let response = proxy_request_status_line(proxy.port, &request);
         assert!(response.contains("403"));
     }
 
@@ -885,26 +859,13 @@ mod tests {
 
     #[test]
     fn proxy_rejects_ip_literal_hostname() {
-        let proxy = NetworkProxy::bind(&[rule("8.8.8.8", false)]).unwrap();
-        let port = proxy.port();
-        let token = proxy.token().to_string();
-        let _handle = proxy.spawn();
-
-        std::thread::sleep(Duration::from_millis(50));
-
-        let auth = format!("Basic {}", base64_encode(&format!("workmux:{}", token)));
-        let request = format!(
-            "CONNECT 8.8.8.8:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
-            auth
+        let proxy = spawn_test_proxy(&[rule("8.8.8.8", false)]);
+        let request = proxy_connect_request(
+            "8.8.8.8:443",
+            "Proxy-Authorization",
+            &proxy_auth(&proxy.token),
         );
-
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
-        let mut response = String::new();
-        let mut reader = BufReader::new(&stream);
-        reader.read_line(&mut response).unwrap();
+        let response = proxy_request_status_line(proxy.port, &request);
         assert!(response.contains("403"));
     }
 }

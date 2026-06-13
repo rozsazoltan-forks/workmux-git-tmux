@@ -258,6 +258,28 @@ fn is_whitespace_literal(info: &TokenInfo) -> bool {
     }
 }
 
+fn render_common_token(
+    info: &TokenInfo,
+    ctx: &RowContext,
+    user_style: &mut Style,
+    spans: &mut Vec<Span<'static>>,
+    used_width: &mut usize,
+) -> bool {
+    match &info.token {
+        Token::Literal(s) => {
+            spans.push(styled_span(s.clone(), Style::default(), *user_style, ctx));
+            *used_width += info.natural_width;
+            false
+        }
+        Token::Fill => false,
+        Token::Style(directive) => {
+            *user_style = apply_tmux_directives(*user_style, directive, Style::default());
+            false
+        }
+        Token::Field(_) => true,
+    }
+}
+
 fn render_with_layout(
     ctx: &RowContext,
     left: &[TokenInfo],
@@ -275,43 +297,36 @@ fn render_with_layout(
 
     // Render left segment
     for info in left {
-        match &info.token {
-            Token::Literal(s) => {
-                spans.push(styled_span(s.clone(), Style::default(), user_style, ctx));
-                used_width += info.natural_width;
-            }
-            Token::Fill => {}
-            Token::Style(directive) => {
-                user_style = apply_tmux_directives(user_style, directive, Style::default());
-            }
-            Token::Field(id) => {
-                if info.is_flex && !first_flex_assigned {
-                    // First flex token: truncate if natural exceeds slack, otherwise
-                    // render at natural width and emit the leftover as a fill-space
-                    // span between left and right segments (handled after the loop).
-                    let allocated = available;
-                    let target_width = info.natural_width.min(allocated);
-                    let rendered_width =
-                        render_field(&mut spans, ctx, *id, target_width, allocated, user_style);
-                    used_width += rendered_width;
-                    if rendered_width < allocated {
-                        slack = allocated - rendered_width;
-                    }
-
-                    first_flex_assigned = true;
-                    available = 0;
-                } else {
-                    // Non-flex or subsequent flex: render at natural width
-                    let max_w = width.saturating_sub(used_width);
-                    used_width += render_field(
-                        &mut spans,
-                        ctx,
-                        *id,
-                        info.natural_width.min(max_w),
-                        max_w,
-                        user_style,
-                    );
+        if render_common_token(info, ctx, &mut user_style, &mut spans, &mut used_width) {
+            let Token::Field(id) = info.token else {
+                continue;
+            };
+            if info.is_flex && !first_flex_assigned {
+                // First flex token: truncate if natural exceeds slack, otherwise
+                // render at natural width and emit the leftover as a fill-space
+                // span between left and right segments (handled after the loop).
+                let allocated = available;
+                let target_width = info.natural_width.min(allocated);
+                let rendered_width =
+                    render_field(&mut spans, ctx, id, target_width, allocated, user_style);
+                used_width += rendered_width;
+                if rendered_width < allocated {
+                    slack = allocated - rendered_width;
                 }
+
+                first_flex_assigned = true;
+                available = 0;
+            } else {
+                // Non-flex or subsequent flex: render at natural width
+                let max_w = width.saturating_sub(used_width);
+                used_width += render_field(
+                    &mut spans,
+                    ctx,
+                    id,
+                    info.natural_width.min(max_w),
+                    max_w,
+                    user_style,
+                );
             }
         }
     }
@@ -336,26 +351,19 @@ fn render_with_layout(
 
     // Render right segment
     for info in right {
-        match &info.token {
-            Token::Literal(s) => {
-                spans.push(styled_span(s.clone(), Style::default(), user_style, ctx));
-                used_width += info.natural_width;
-            }
-            Token::Fill => {}
-            Token::Style(directive) => {
-                user_style = apply_tmux_directives(user_style, directive, Style::default());
-            }
-            Token::Field(id) => {
-                let max_w = width.saturating_sub(used_width);
-                used_width += render_field(
-                    &mut spans,
-                    ctx,
-                    *id,
-                    info.natural_width.min(max_w),
-                    max_w,
-                    user_style,
-                );
-            }
+        if render_common_token(info, ctx, &mut user_style, &mut spans, &mut used_width) {
+            let Token::Field(id) = info.token else {
+                continue;
+            };
+            let max_w = width.saturating_sub(used_width);
+            used_width += render_field(
+                &mut spans,
+                ctx,
+                id,
+                info.natural_width.min(max_w),
+                max_w,
+                user_style,
+            );
         }
     }
 

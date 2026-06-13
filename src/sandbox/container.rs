@@ -805,6 +805,62 @@ mod tests {
         .unwrap()
     }
 
+    fn sandbox_config(
+        runtime: SandboxRuntime,
+        configure: impl FnOnce(&mut ContainerConfig),
+    ) -> SandboxConfig {
+        let mut container = ContainerConfig {
+            runtime: Some(runtime),
+            ..Default::default()
+        };
+        configure(&mut container);
+        SandboxConfig {
+            enabled: Some(true),
+            container,
+            image: Some("test-image:latest".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn test_build_run_args(config: &SandboxConfig, network_deny: bool) -> Vec<String> {
+        build_docker_run_args(
+            "claude",
+            config,
+            "claude",
+            Path::new("/tmp/project"),
+            Path::new("/tmp/project"),
+            &[],
+            None,
+            network_deny,
+        )
+        .unwrap()
+    }
+
+    fn test_build_run_args_for_agent(agent: &str, config: &SandboxConfig) -> Vec<String> {
+        build_docker_run_args(
+            agent,
+            config,
+            agent,
+            Path::new("/tmp/project"),
+            Path::new("/tmp/project"),
+            &[],
+            None,
+            false,
+        )
+        .unwrap()
+    }
+
+    fn agent_sandbox_config(runtime: SandboxRuntime) -> SandboxConfig {
+        SandboxConfig {
+            enabled: Some(true),
+            container: ContainerConfig {
+                runtime: Some(runtime),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_build_args_basic() {
         let config = make_config();
@@ -1118,52 +1174,16 @@ mod tests {
 
     #[test]
     fn test_build_args_podman_omits_add_host() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Podman),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Podman, |_| {});
+        let args = test_build_run_args(&config, false);
 
         assert!(!args.contains(&"--add-host".to_string()));
     }
 
     #[test]
     fn test_build_args_runtime_not_in_args() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Podman),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Podman, |_| {});
+        let args = test_build_run_args(&config, false);
 
         assert!(!args.contains(&"podman".to_string()));
         assert!(!args.contains(&"docker".to_string()));
@@ -1607,26 +1627,8 @@ mod tests {
 
     #[test]
     fn test_build_args_network_deny_podman_no_keep_id() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Podman),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            true,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Podman, |_| {});
+        let args = test_build_run_args(&config, true);
 
         // Deny mode should NOT use --userns=keep-id
         assert!(!args.contains(&"--userns=keep-id".to_string()));
@@ -1655,26 +1657,8 @@ mod tests {
 
     #[test]
     fn test_build_args_apple_container_omits_docker_podman_flags() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |_| {});
+        let args = test_build_run_args(&config, false);
 
         // Should NOT have Docker's --add-host
         assert!(!args.contains(&"--add-host".to_string()));
@@ -1684,26 +1668,8 @@ mod tests {
 
     #[test]
     fn test_build_args_apple_container_deny_mode_skips_caps() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            true, // network_deny
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |_| {});
+        let args = test_build_run_args(&config, true);
 
         // Should NOT have --cap-add=NET_ADMIN or --security-opt
         assert!(!args.contains(&"--cap-add=NET_ADMIN".to_string()));
@@ -1715,26 +1681,8 @@ mod tests {
 
     #[test]
     fn test_build_args_apple_container_default_memory() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |_| {});
+        let args = test_build_run_args(&config, false);
 
         // Apple Container should get --memory 16G by default
         let mem_idx = args.iter().position(|a| a == "--memory").unwrap();
@@ -1745,28 +1693,11 @@ mod tests {
 
     #[test]
     fn test_build_args_apple_container_custom_resources() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                memory: Some("8G".to_string()),
-                cpus: Some(8),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |c| {
+            c.memory = Some("8G".to_string());
+            c.cpus = Some(8);
+        });
+        let args = test_build_run_args(&config, false);
 
         let mem_idx = args.iter().position(|a| a == "--memory").unwrap();
         assert_eq!(args[mem_idx + 1], "8G");
@@ -1786,27 +1717,10 @@ mod tests {
 
     #[test]
     fn test_build_args_docker_explicit_memory() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Docker),
-                memory: Some("4G".to_string()),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Docker, |c| {
+            c.memory = Some("4G".to_string());
+        });
+        let args = test_build_run_args(&config, false);
 
         // Explicit memory should be passed even for Docker
         let mem_idx = args.iter().position(|a| a == "--memory").unwrap();
@@ -1822,30 +1736,13 @@ mod tests {
 
     #[test]
     fn docker_emits_device_flags() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Docker),
-                devices: Some(vec![
-                    ContainerDevice::String("/dev/kvm".to_string()),
-                    ContainerDevice::String("/dev/dri:/dev/dri:rwm".to_string()),
-                ]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Docker, |c| {
+            c.devices = Some(vec![
+                ContainerDevice::String("/dev/kvm".to_string()),
+                ContainerDevice::String("/dev/dri:/dev/dri:rwm".to_string()),
+            ]);
+        });
+        let args = test_build_run_args(&config, false);
 
         let devs = find_flag_value(&args, "--device");
         assert!(devs.contains(&"/dev/kvm"));
@@ -1854,27 +1751,10 @@ mod tests {
 
     #[test]
     fn docker_allow_mode_emits_group_add() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Docker),
-                group_add: Some(vec!["dialout".to_string(), "video".to_string()]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Docker, |c| {
+            c.group_add = Some(vec!["dialout".to_string(), "video".to_string()]);
+        });
+        let args = test_build_run_args(&config, false);
 
         let groups = find_flag_value(&args, "--group-add");
         assert!(groups.contains(&"dialout"));
@@ -1884,27 +1764,10 @@ mod tests {
 
     #[test]
     fn docker_deny_mode_uses_wm_extra_gids_not_group_add() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Docker),
-                group_add: Some(vec!["dialout".to_string(), "20".to_string()]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            true,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Docker, |c| {
+            c.group_add = Some(vec!["dialout".to_string(), "20".to_string()]);
+        });
+        let args = test_build_run_args(&config, true);
 
         assert!(!args.iter().any(|a| a == "--group-add"));
         assert!(args.iter().any(|a| a == "WM_EXTRA_GIDS=dialout,20"));
@@ -1912,27 +1775,10 @@ mod tests {
 
     #[test]
     fn docker_deny_mode_still_emits_device_flags() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Docker),
-                devices: Some(vec![ContainerDevice::String("/dev/kvm".to_string())]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            true,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Docker, |c| {
+            c.devices = Some(vec![ContainerDevice::String("/dev/kvm".to_string())]);
+        });
+        let args = test_build_run_args(&config, true);
 
         let devs = find_flag_value(&args, "--device");
         assert!(devs.contains(&"/dev/kvm"));
@@ -1940,16 +1786,9 @@ mod tests {
 
     #[test]
     fn apple_container_rejects_devices() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                devices: Some(vec![ContainerDevice::String("/dev/kvm".to_string())]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |c| {
+            c.devices = Some(vec![ContainerDevice::String("/dev/kvm".to_string())]);
+        });
         let result = build_docker_run_args(
             "claude",
             &config,
@@ -1965,16 +1804,9 @@ mod tests {
 
     #[test]
     fn apple_container_rejects_group_add() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                group_add: Some(vec!["dialout".to_string()]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
+        let config = sandbox_config(SandboxRuntime::AppleContainer, |c| {
+            c.group_add = Some(vec!["dialout".to_string()]);
+        });
         let result = build_docker_run_args(
             "claude",
             &config,
@@ -1990,28 +1822,11 @@ mod tests {
 
     #[test]
     fn podman_allow_mode_supports_devices_and_group_add() {
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::Podman),
-                devices: Some(vec![ContainerDevice::String("/dev/kvm".to_string())]),
-                group_add: Some(vec!["dialout".to_string()]),
-                ..Default::default()
-            },
-            image: Some("test-image:latest".to_string()),
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "claude",
-            &config,
-            "claude",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = sandbox_config(SandboxRuntime::Podman, |c| {
+            c.devices = Some(vec![ContainerDevice::String("/dev/kvm".to_string())]);
+            c.group_add = Some(vec!["dialout".to_string()]);
+        });
+        let args = test_build_run_args(&config, false);
 
         let devs = find_flag_value(&args, "--device");
         assert!(devs.contains(&"/dev/kvm"));
@@ -2021,26 +1836,8 @@ mod tests {
 
     #[test]
     fn test_build_args_pi_agent_apple_container_mounts_config_dir() {
-        use crate::config::{ContainerConfig, SandboxConfig, SandboxRuntime};
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "pi",
-            &config,
-            "pi",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = agent_sandbox_config(SandboxRuntime::AppleContainer);
+        let args = test_build_run_args_for_agent("pi", &config);
 
         let args_str = args.join(" ");
         // Pi agent should mount ~/.pi/agent to /tmp/.pi/agent
@@ -2059,26 +1856,8 @@ mod tests {
 
     #[test]
     fn test_build_args_omp_agent_mounts_config_dir() {
-        use crate::config::{ContainerConfig, SandboxConfig, SandboxRuntime};
-        let config = SandboxConfig {
-            enabled: Some(true),
-            container: ContainerConfig {
-                runtime: Some(SandboxRuntime::AppleContainer),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let args = build_docker_run_args(
-            "omp",
-            &config,
-            "omp",
-            Path::new("/tmp/project"),
-            Path::new("/tmp/project"),
-            &[],
-            None,
-            false,
-        )
-        .unwrap();
+        let config = agent_sandbox_config(SandboxRuntime::AppleContainer);
+        let args = test_build_run_args_for_agent("omp", &config);
 
         let args_str = args.join(" ");
         assert!(
