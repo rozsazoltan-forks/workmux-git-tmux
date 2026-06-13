@@ -2,14 +2,15 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Rect},
+    layout::Constraint,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Cell, Clear, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table},
 };
 
 use super::super::app::{App, DashboardTab, ViewMode};
 use super::super::keymap::{Context, help_rows};
+use super::popup::{centered_rect, popup_block, render_popup};
 
 /// Determine the current keymap context for help display.
 fn get_help_context(app: &App) -> Context {
@@ -62,22 +63,8 @@ fn context_title(ctx: Context) -> &'static str {
 /// Render the kill confirmation popup.
 pub fn render_confirm_kill(f: &mut Frame, app: &App) {
     let palette = &app.palette;
-
-    let height = 3;
-    let width = 34;
-
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border));
-
+    let area = centered_rect(f.area(), 34, 3);
+    let block = popup_block(None, palette);
     let text = Line::from(vec![
         Span::styled(" Kill working agent? ", Style::default().fg(palette.text)),
         Span::styled(
@@ -95,11 +82,8 @@ pub fn render_confirm_kill(f: &mut Frame, app: &App) {
         ),
         Span::styled("o", Style::default().fg(palette.dimmed)),
     ]);
-
     let paragraph = Paragraph::new(text).block(block);
-
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, area, paragraph);
 }
 
 /// Render the remove worktree confirmation modal.
@@ -212,22 +196,10 @@ pub fn render_confirm_remove(f: &mut Frame, app: &App) {
     let height = lines.len() as u16 + 2; // +2 for borders
     let width = 44;
 
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border));
-
+    let area = centered_rect(f.area(), width, height);
+    let block = popup_block(None, palette);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
-
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, area, paragraph);
 }
 
 /// Render the help overlay.
@@ -241,36 +213,14 @@ pub fn render_help(f: &mut Frame, app: &App) {
     let height = row_count + 5; // +5 for borders, padding, and empty line at top
     let width = 44;
 
-    // Center the popup
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
     let palette = &app.palette;
 
     // Create styled block with rounded corners
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                title,
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .title_bottom(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled("any key", Style::default().fg(palette.dimmed)),
-            Span::styled(" to close ", Style::default().fg(palette.help_muted)),
-        ]));
+    let block = popup_block(Some(title), palette).title_bottom(Line::from(vec![
+        Span::styled(" ", Style::default()),
+        Span::styled("any key", Style::default().fg(palette.dimmed)),
+        Span::styled(" to close ", Style::default().fg(palette.help_muted)),
+    ]));
 
     // Build styled rows with empty line at top for padding
     let mut rows: Vec<Row> = vec![Row::new(vec![Cell::from(""), Cell::from("")])];
@@ -296,8 +246,7 @@ pub fn render_help(f: &mut Frame, app: &App) {
         .block(block)
         .column_spacing(0);
 
-    f.render_widget(Clear, popup_area);
-    f.render_widget(table, popup_area);
+    render_popup(f, centered_rect(f.area(), width, height), table);
 }
 
 /// Render the sweep progress overlay.
@@ -328,31 +277,10 @@ pub fn render_sweep_progress(f: &mut Frame, app: &App) {
     let height = lines.len() as u16 + 2;
     let content_width = lines.iter().map(|l| l.width()).max().unwrap_or(30);
     let width = (content_width as u16 + 4).max(36);
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                "Sweep",
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
-
+    let area = centered_rect(f.area(), width, height);
+    let block = popup_block(Some("Sweep"), palette);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, area, paragraph);
 }
 
 /// Render the sweep cleanup modal.
@@ -385,31 +313,10 @@ pub fn render_sweep(f: &mut Frame, app: &App) {
 
         let height = lines.len() as u16 + 2;
         let width = 38;
-        let area = f.area();
-        let popup_area = Rect {
-            x: area.width.saturating_sub(width) / 2,
-            y: area.height.saturating_sub(height) / 2,
-            width: width.min(area.width),
-            height: height.min(area.height),
-        };
-
-        let block = Block::bordered()
-            .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::default().fg(palette.help_border))
-            .title(Line::from(vec![
-                Span::styled(" ", Style::default()),
-                Span::styled(
-                    "Sweep",
-                    Style::default()
-                        .fg(palette.header)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" ", Style::default()),
-            ]));
-
+        let area = centered_rect(f.area(), width, height);
+        let block = popup_block(Some("Sweep"), palette);
         let paragraph = Paragraph::new(Text::from(lines)).block(block);
-        f.render_widget(Clear, popup_area);
-        f.render_widget(paragraph, popup_area);
+        render_popup(f, area, paragraph);
         return;
     }
 
@@ -476,32 +383,10 @@ pub fn render_sweep(f: &mut Frame, app: &App) {
         .unwrap_or(30);
     let width = (content_width as u16 + 4).max(44); // +4 for border+padding
 
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                "Sweep",
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
-
+    let area = centered_rect(f.area(), width, height);
+    let block = popup_block(Some("Sweep"), palette);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
-
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, area, paragraph);
 }
 
 /// Render the base branch picker modal.
@@ -610,31 +495,12 @@ pub fn render_base_picker(f: &mut Frame, app: &App) {
         dim(" cancel"),
     ]));
 
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
+    let popup_area = centered_rect(f.area(), width, height);
 
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                "Set Base Branch",
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
-
+    let block = popup_block(Some("Set Base Branch"), palette);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
 
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, popup_area, paragraph);
 }
 
 /// Render the project picker modal.
@@ -718,32 +584,11 @@ pub fn render_project_picker(f: &mut Frame, app: &App) {
         .unwrap_or(20);
     let width = (content_width as u16 + 4).clamp(36, 60);
 
-    let area = f.area();
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
-
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                "Switch Project",
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
-
+    let area = centered_rect(f.area(), width, height);
+    let block = popup_block(Some("Switch Project"), palette);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
 
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, area, paragraph);
 }
 
 /// Render the command palette modal.
@@ -867,31 +712,12 @@ pub fn render_command_palette(f: &mut Frame, app: &App) {
         dim(" cancel"),
     ]));
 
-    let popup_area = Rect {
-        x: area.width.saturating_sub(popup_width) / 2,
-        y: area.height.saturating_sub(popup_height) / 2,
-        width: popup_width,
-        height: popup_height,
-    };
+    let popup_area = centered_rect(f.area(), popup_width, popup_height);
 
-    let block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette_ref.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                "Command Palette",
-                Style::default()
-                    .fg(palette_ref.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
-
+    let block = popup_block(Some("Command Palette"), palette_ref);
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
 
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, popup_area, paragraph);
 }
 
 /// Render the add-worktree modal.
@@ -1175,12 +1001,7 @@ pub fn render_add_worktree(f: &mut Frame, app: &App) {
     }
     lines.push(Line::from(""));
 
-    let popup_area = Rect {
-        x: area.width.saturating_sub(width) / 2,
-        y: area.height.saturating_sub(height) / 2,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    };
+    let popup_area = centered_rect(f.area(), width, height);
 
     // Title and bottom border
     let title_text = if is_pr_mode {
@@ -1189,19 +1010,7 @@ pub fn render_add_worktree(f: &mut Frame, app: &App) {
         "Add Worktree"
     };
 
-    let mut block = Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(palette.help_border))
-        .title(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                title_text,
-                Style::default()
-                    .fg(palette.header)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]));
+    let mut block = popup_block(Some(title_text), palette);
 
     // Show base branch on bottom border only in branch mode
     if !is_pr_mode {
@@ -1228,6 +1037,5 @@ pub fn render_add_worktree(f: &mut Frame, app: &App) {
 
     let paragraph = Paragraph::new(Text::from(lines)).block(block);
 
-    f.render_widget(Clear, popup_area);
-    f.render_widget(paragraph, popup_area);
+    render_popup(f, popup_area, paragraph);
 }

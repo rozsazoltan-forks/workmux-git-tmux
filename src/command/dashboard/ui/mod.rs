@@ -4,6 +4,7 @@ mod dashboard;
 mod diff;
 mod format;
 mod help;
+mod popup;
 pub mod theme;
 pub mod worktree;
 
