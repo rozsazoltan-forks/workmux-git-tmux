@@ -7,6 +7,29 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use std::path::PathBuf;
 
+macro_rules! impl_passthrough_typed_value_parser {
+    ($parser:ty) => {
+        impl clap::builder::TypedValueParser for $parser {
+            type Value = String;
+
+            fn parse_ref(
+                &self,
+                cmd: &clap::Command,
+                _arg: Option<&clap::Arg>,
+                value: &std::ffi::OsStr,
+            ) -> Result<Self::Value, clap::Error> {
+                clap::builder::StringValueParser::new().parse_ref(cmd, None, value)
+            }
+
+            fn possible_values(
+                &self,
+            ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+                None
+            }
+        }
+    };
+}
+
 #[derive(Clone, Debug)]
 struct WorktreeBranchParser;
 
@@ -40,28 +63,7 @@ impl WorktreeBranchParser {
     }
 }
 
-impl clap::builder::TypedValueParser for WorktreeBranchParser {
-    type Value = String;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        // Use the default string parser for validation.
-        clap::builder::StringValueParser::new().parse_ref(cmd, None, value)
-    }
-
-    fn possible_values(
-        &self,
-    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
-        // Return None to avoid running git operations during completion script generation.
-        // Dynamic completions are handled by the _complete-branches subcommand,
-        // which is called by the shell only when the user presses TAB.
-        None
-    }
-}
+impl_passthrough_typed_value_parser!(WorktreeBranchParser);
 
 /// Parser for worktree handles (directory names), used for open/path/remove commands.
 #[derive(Clone, Debug)]
@@ -101,28 +103,7 @@ impl WorktreeHandleParser {
     }
 }
 
-impl clap::builder::TypedValueParser for WorktreeHandleParser {
-    type Value = String;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        // Use the default string parser for validation.
-        clap::builder::StringValueParser::new().parse_ref(cmd, None, value)
-    }
-
-    fn possible_values(
-        &self,
-    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
-        // Return None to avoid running git operations during completion script generation.
-        // Dynamic completions are handled by the _complete-handles subcommand,
-        // which is called by the shell only when the user presses TAB.
-        None
-    }
-}
+impl_passthrough_typed_value_parser!(WorktreeHandleParser);
 
 /// Parser for agent targets, used for send/capture/status/wait/run commands.
 ///
@@ -183,25 +164,7 @@ impl AgentTargetParser {
     }
 }
 
-impl clap::builder::TypedValueParser for AgentTargetParser {
-    type Value = String;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        clap::builder::StringValueParser::new().parse_ref(cmd, None, value)
-    }
-
-    fn possible_values(
-        &self,
-    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
-        // Dynamic completions handled by _complete-agent-targets subcommand
-        None
-    }
-}
+impl_passthrough_typed_value_parser!(AgentTargetParser);
 
 #[derive(Clone, Debug)]
 struct GitBranchParser;
@@ -222,28 +185,7 @@ impl GitBranchParser {
     }
 }
 
-impl clap::builder::TypedValueParser for GitBranchParser {
-    type Value = String;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        // Use the default string parser for validation.
-        clap::builder::StringValueParser::new().parse_ref(cmd, None, value)
-    }
-
-    fn possible_values(
-        &self,
-    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
-        // Return None to avoid running git operations during completion script generation.
-        // Dynamic completions are handled by the _complete-git-branches subcommand,
-        // which is called by the shell only when the user presses TAB.
-        None
-    }
-}
+impl_passthrough_typed_value_parser!(GitBranchParser);
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
