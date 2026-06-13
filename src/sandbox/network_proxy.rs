@@ -19,6 +19,7 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::config::AllowedDomainRule;
+use crate::sandbox::constant_time::constant_time_eq;
 use crate::sandbox::rpc::generate_token;
 
 /// Maximum concurrent proxy connections. Matches RPC server cap.
@@ -212,18 +213,6 @@ fn allowed_target_addrs(addrs: &[SocketAddr], allow_private_ips: bool) -> Vec<&S
             AddressClass::AlwaysBlocked => false,
         })
         .collect()
-}
-
-/// Constant-time byte comparison to prevent timing side-channel attacks.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 /// Parse and handle a single proxy connection.

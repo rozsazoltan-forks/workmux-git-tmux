@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::multiplexer::{AgentStatus, Multiplexer};
+use crate::sandbox::constant_time::constant_time_eq;
 
 // ── Protocol types ──────────────────────────────────────────────────────
 
@@ -160,19 +161,6 @@ pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("failed to get random bytes");
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Constant-time byte comparison to prevent timing side-channel attacks.
-/// Always compares every byte regardless of where the first difference is.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 // ── Connection handler ──────────────────────────────────────────────────
