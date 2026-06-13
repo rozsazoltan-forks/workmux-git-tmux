@@ -172,10 +172,10 @@ def test_open_with_new_flag_creates_incrementing_suffixes(
 # WezTerm: CLI doesn't support inserting tabs at specific positions like tmux's
 # -a flag. New tabs always append at the end.
 @pytest.mark.tmux_only
-def test_open_new_inserts_after_base_group(
+def test_open_new_inserts_right_of_current_window(
     mux_server: MuxEnvironment, workmux_exe_path: Path, repo_path: Path
 ):
-    """Verifies `workmux open --new` inserts duplicate after base handle group, not at end."""
+    """Verifies `workmux open --new` inserts duplicate right of the current window."""
     env = mux_server
 
     write_workmux_config(repo_path)
@@ -185,22 +185,23 @@ def test_open_new_inserts_after_base_group(
     run_workmux_add(env, workmux_exe_path, repo_path, "my-feature")
     run_workmux_add(env, workmux_exe_path, repo_path, "feature-b")
 
-    # Create a duplicate of my-feature
+    # Run the duplicate open from feature-a, not from the base window.
+    feature_a = get_window_name("feature-a")
+    env.select_window(feature_a)
     run_workmux_open(env, workmux_exe_path, repo_path, "my-feature", new_window=True)
 
     # Get window list (tmux list-windows outputs in index order)
     windows = _get_all_windows(env)
     base = get_window_name("my-feature")
     dup = f"{base}-2"
-    feature_b = get_window_name("feature-b")
 
-    # Duplicate should be immediately after base, and before feature-b
+    # Duplicate should be immediately after the current window where the command ran.
     assert dup in windows, f"Expected {dup} in {windows}"
-    assert windows.index(dup) == windows.index(base) + 1, (
-        f"Duplicate {dup} should be immediately after {base}. Windows: {windows}"
+    assert windows.index(dup) == windows.index(feature_a) + 1, (
+        f"Duplicate {dup} should be immediately after {feature_a}. Windows: {windows}"
     )
-    assert windows.index(feature_b) > windows.index(dup), (
-        f"{feature_b} should be after duplicate {dup}. Windows: {windows}"
+    assert windows.index(dup) < windows.index(base), (
+        f"Duplicate {dup} should appear before {base}. Windows: {windows}"
     )
 
 

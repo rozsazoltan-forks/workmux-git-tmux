@@ -477,21 +477,6 @@ impl Multiplexer for WezTermBackend {
             .collect())
     }
 
-    fn find_last_window_with_prefix(&self, _prefix: &str) -> Result<Option<String>> {
-        // WezTerm doesn't support tab insertion ordering via CLI
-        // Return None - new tabs will appear at end
-        Ok(None)
-    }
-
-    fn find_last_window_with_base_handle(
-        &self,
-        _prefix: &str,
-        _base_handle: &str,
-    ) -> Result<Option<String>> {
-        // WezTerm doesn't support tab insertion ordering via CLI
-        Ok(None)
-    }
-
     fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
         if full_window_names.is_empty() {
             return Ok(());

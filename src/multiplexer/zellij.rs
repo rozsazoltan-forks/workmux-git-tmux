@@ -478,19 +478,6 @@ impl Multiplexer for ZellijBackend {
             .collect())
     }
 
-    fn find_last_window_with_prefix(&self, _prefix: &str) -> Result<Option<String>> {
-        // Zellij doesn't support window ordering
-        Ok(None)
-    }
-
-    fn find_last_window_with_base_handle(
-        &self,
-        _prefix: &str,
-        _base_handle: &str,
-    ) -> Result<Option<String>> {
-        Ok(None)
-    }
-
     fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
         use std::thread;
 

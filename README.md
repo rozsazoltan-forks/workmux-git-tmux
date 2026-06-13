@@ -1397,7 +1397,8 @@ worktrees at once.
 
 - `-n, --new`: Force opening in a new window even if one already exists. Creates
   a duplicate window with a suffix (e.g., `-2`, `-3`). Useful for having
-  multiple terminal views into the same worktree.
+  multiple terminal views into the same worktree. In tmux, the duplicate appears
+  immediately to the right of the window where the command runs.
 - `-s, --session`: Open in session mode, overriding the stored mode. Persists
   the mode change for subsequent opens. Cannot be combined with `--new`. Only
   supported with tmux.
@@ -1420,7 +1421,9 @@ worktrees at once.
 
 1. Verifies that a worktree with `<name>` exists.
 2. If a tmux window exists and `--new` is not set, switches to it.
-3. Otherwise, creates a new tmux window (with suffix if duplicating).
+3. Otherwise, creates a new tmux window (with suffix if duplicating). In tmux,
+   duplicate windows appear immediately to the right of the window where the
+   command runs.
 4. (If specified) Runs file operations and `post_create` hooks.
 5. Sets up your configured tmux pane layout.
 6. Automatically switches your tmux client to the new window.

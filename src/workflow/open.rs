@@ -330,16 +330,10 @@ pub fn open(
     }
 
     // Determine handle: use suffix if forcing new target and one exists
-    let (handle, after_window) = if new_window && target_exists {
-        let unique_handle = resolve_unique_handle(context, target_name)?;
-        // Insert after the last window in the target name group (base or -N suffixes)
-        let after = context
-            .mux
-            .find_last_window_with_base_handle(&context.prefix, target_name)
-            .unwrap_or(None);
-        (unique_handle, after)
+    let handle = if new_window && target_exists {
+        resolve_unique_handle(context, target_name)?
     } else {
-        (target_name.to_string(), None)
+        target_name.to_string()
     };
 
     // Compute working directory from config location
@@ -383,7 +377,7 @@ pub fn open(
         &context.config,
         &options_with_workdir,
         agent,
-        after_window,
+        None,
     )?;
     info!(
         handle = handle,

@@ -815,18 +815,6 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn find_last_window_with_prefix(&self, _prefix: &str) -> Result<Option<String>> {
-            Ok(None)
-        }
-
-        fn find_last_window_with_base_handle(
-            &self,
-            _prefix: &str,
-            _base_handle: &str,
-        ) -> Result<Option<String>> {
-            Ok(None)
-        }
-
         fn wait_until_windows_closed(&self, _full_window_names: &[String]) -> Result<()> {
             Ok(())
         }

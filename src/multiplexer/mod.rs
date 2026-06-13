@@ -229,16 +229,6 @@ pub trait Multiplexer: Send + Sync {
     /// Filter a list of window names, returning only those that still exist
     fn filter_active_windows(&self, windows: &[String]) -> Result<Vec<String>>;
 
-    /// Find the last window (by index) that starts with the given prefix
-    fn find_last_window_with_prefix(&self, prefix: &str) -> Result<Option<String>>;
-
-    /// Find the last window that belongs to a specific base handle group
-    fn find_last_window_with_base_handle(
-        &self,
-        prefix: &str,
-        base_handle: &str,
-    ) -> Result<Option<String>>;
-
     /// Wait until all specified windows are closed
     fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()>;
 

@@ -217,11 +217,11 @@ impl Multiplexer for TmuxBackend {
             .to_str()
             .ok_or_else(|| anyhow!("Working directory path contains non-UTF8 characters"))?;
 
-        let mut cmd = Cmd::new("tmux").args(&["new-window", "-d"]);
+        let mut cmd = Cmd::new("tmux").args(&["new-window", "-d", "-a"]);
 
-        // Insert after the target window if specified (keeps workmux windows grouped)
+        // With no explicit target, tmux inserts after the current window.
         if let Some(target) = params.after_window {
-            cmd = cmd.arg("-a").args(&["-t", target]);
+            cmd = cmd.args(&["-t", target]);
         }
 
         // Use -P to print pane info, -F to format output to just the pane ID
@@ -586,53 +586,6 @@ impl Multiplexer for TmuxBackend {
             .filter(|w| all_current.contains(*w))
             .cloned()
             .collect())
-    }
-
-    fn find_last_window_with_prefix(&self, prefix: &str) -> Result<Option<String>> {
-        let output = self
-            .tmux_query(&["list-windows", "-F", "#{window_id} #{window_name}"])
-            .unwrap_or_default();
-
-        let mut last_match: Option<String> = None;
-
-        for line in output.lines() {
-            if let Some((id, name)) = line.split_once(' ')
-                && name.starts_with(prefix)
-            {
-                last_match = Some(id.to_string());
-            }
-        }
-
-        Ok(last_match)
-    }
-
-    fn find_last_window_with_base_handle(
-        &self,
-        prefix: &str,
-        base_handle: &str,
-    ) -> Result<Option<String>> {
-        let output = self
-            .tmux_query(&["list-windows", "-F", "#{window_id} #{window_name}"])
-            .unwrap_or_default();
-
-        let full_base = util::prefixed(prefix, base_handle);
-        let full_base_dash = format!("{}-", full_base);
-        let mut last_match: Option<String> = None;
-
-        for line in output.lines() {
-            if let Some((id, name)) = line.split_once(' ') {
-                let is_exact = name == full_base;
-                let is_numeric_suffix = name.strip_prefix(&full_base_dash).is_some_and(|suffix| {
-                    !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
-                });
-
-                if is_exact || is_numeric_suffix {
-                    last_match = Some(id.to_string());
-                }
-            }
-        }
-
-        Ok(last_match)
     }
 
     fn wait_until_windows_closed(&self, full_window_names: &[String]) -> Result<()> {
