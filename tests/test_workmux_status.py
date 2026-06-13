@@ -9,9 +9,7 @@ from pathlib import Path
 
 from .conftest import (
     MuxEnvironment,
-    run_workmux_add,
     run_workmux_command,
-    write_workmux_config,
 )
 from .support.agent_state import start_active_agent
 

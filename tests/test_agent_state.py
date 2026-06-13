@@ -12,6 +12,7 @@ through the dashboard TUI, which calls load_reconciled_agents(). These tests
 verify the state files have the fields needed for reconciliation to work.
 """
 
+import json
 from pathlib import Path
 
 from .conftest import (
