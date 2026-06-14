@@ -15,11 +15,10 @@ from pathlib import Path
 from .conftest import (
     MuxEnvironment,
     WorkmuxCommandResult,
-    get_scripts_dir,
     get_window_name,
     poll_until,
-    poll_until_file_has_content,
     run_workmux_add,
+    run_workmux_command,
     wait_for_window_ready,
     write_workmux_config,
 )
@@ -75,65 +74,14 @@ def run_workmux_run(
     command: str,
     expect_fail: bool = False,
 ) -> WorkmuxCommandResult:
-    """Run a `workmux run` command with extended timeout.
-
-    The `run` command involves splitting a pane, starting the `_exec` process,
-    and streaming output -- more latency than simple coordinator commands.
-    Uses a 10s timeout instead of the default 5s.
-
-    Writes the command to a script file to avoid tmux send-keys line length
-    limits (long PATH values cause silent truncation).
-    """
-    scripts_dir = get_scripts_dir(env)
-    stdout_file = scripts_dir / "workmux_run_stdout.txt"
-    stderr_file = scripts_dir / "workmux_run_stderr.txt"
-    exit_code_file = scripts_dir / "workmux_run_exit_code.txt"
-    script_file = scripts_dir / "workmux_run.sh"
-
-    for f in [stdout_file, stderr_file, exit_code_file]:
-        if f.exists():
-            f.unlink()
-
-    script_content = f"""#!/bin/sh
-trap 'echo $? > {shlex.quote(str(exit_code_file))}' EXIT
-export PATH={shlex.quote(env.env["PATH"])}
-export TMPDIR={shlex.quote(env.env.get("TMPDIR", "/tmp"))}
-export HOME={shlex.quote(env.env.get("HOME", ""))}
-export WORKMUX_TEST=1
-cd {shlex.quote(str(repo_path))}
-{shlex.quote(str(workmux_exe_path))} {command} > {shlex.quote(str(stdout_file))} 2> {shlex.quote(str(stderr_file))}
-"""
-    script_file.write_text(script_content)
-    script_file.chmod(0o755)
-
-    env.send_keys("test:", str(script_file), enter=True)
-
-    if not poll_until_file_has_content(exit_code_file, timeout=10.0):
-        pane_content = env.capture_pane("test") or "(empty)"
-        raise AssertionError(
-            f"workmux run did not complete in time\nPane content:\n{pane_content}"
-        )
-
-    result = WorkmuxCommandResult(
-        exit_code=int(exit_code_file.read_text().strip()),
-        stdout=stdout_file.read_text() if stdout_file.exists() else "",
-        stderr=stderr_file.read_text() if stderr_file.exists() else "",
+    return run_workmux_command(
+        env,
+        workmux_exe_path,
+        repo_path,
+        command,
+        expect_fail=expect_fail,
+        timeout=10.0,
     )
-
-    if expect_fail:
-        if result.exit_code == 0:
-            raise AssertionError(
-                f"workmux {command} was expected to fail but succeeded.\n"
-                f"Stdout:\n{result.stdout}"
-            )
-    else:
-        if result.exit_code != 0:
-            raise AssertionError(
-                f"workmux {command} failed with exit code {result.exit_code}\n"
-                f"{result.stderr}"
-            )
-
-    return result
 
 
 # ---------------------------------------------------------------------------

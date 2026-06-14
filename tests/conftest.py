@@ -1508,6 +1508,7 @@ def run_workmux_command(
     working_dir: Optional[Path] = None,
     stdin_input: Optional[str] = None,
     pre_run_env: Optional[dict] = None,
+    timeout: float = 10.0,
 ) -> WorkmuxCommandResult:
     """
     Helper to run a workmux command inside the isolated multiplexer session.
@@ -1524,6 +1525,7 @@ def run_workmux_command(
         working_dir: Optional directory to run the command from (defaults to repo_path)
         stdin_input: Optional text to pipe to the command's stdin
         pre_run_env: Optional dict of environment variables to export before running
+        timeout: Seconds to wait for the command to complete
     """
     scripts_dir = get_scripts_dir(env)
     stdout_file = scripts_dir / "workmux_stdout.txt"
@@ -1572,7 +1574,7 @@ export WORKMUX_TEST=1
     # Execute the script - this keeps the send_keys command short
     env.send_keys("test:", str(script_file), enter=True)
 
-    if not poll_until_file_has_content(exit_code_file, timeout=10.0):
+    if not poll_until_file_has_content(exit_code_file, timeout=timeout):
         # Capture pane content for debugging
         pane_content = env.capture_pane("test") or "(empty)"
         raise AssertionError(
