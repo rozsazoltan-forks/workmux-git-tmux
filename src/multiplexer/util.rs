@@ -2,7 +2,6 @@
 //!
 //! These helpers are shared between tmux, WezTerm, and any future backends.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -132,6 +131,53 @@ pub struct ResolvedCommand {
     pub prompt_injected: bool,
     /// Selected agent metadata for agent panes.
     pub selected_agent: Option<SelectedAgent>,
+    prompt_argument: Option<String>,
+    posix_shell: bool,
+    use_agent_command: bool,
+    apply_agent_prefix: bool,
+}
+
+impl ResolvedCommand {
+    pub fn render_command(&self) -> String {
+        let mut command = if self.use_agent_command {
+            self.renderable_command()
+        } else {
+            self.render_raw_command()
+        };
+        if let Some(prompt_argument) = &self.prompt_argument {
+            command.push(' ');
+            command.push_str(prompt_argument);
+            command = if self.posix_shell {
+                command
+            } else {
+                wrap_for_non_posix_shell(&command)
+            };
+            command.insert(0, ' ');
+        }
+        command
+    }
+
+    pub fn renderable_command(&self) -> String {
+        self.selected_agent
+            .as_ref()
+            .map(SelectedAgent::shell_command)
+            .unwrap_or_else(|| self.command.clone())
+    }
+
+    fn render_raw_command(&self) -> String {
+        let Some(agent) = &self.selected_agent else {
+            return self.command.clone();
+        };
+        if !self.apply_agent_prefix {
+            return self.command.clone();
+        }
+        let mut prefix = agent.command.shell_string();
+        if prefix == self.command || !self.command.starts_with(&agent.command.program) {
+            return self.command.clone();
+        }
+        prefix.push_str(&self.command[agent.command.program.len()..]);
+        prefix
+    }
 }
 
 pub fn resolve_pane_command_with_config(
@@ -150,10 +196,23 @@ pub fn resolve_pane_command_with_config(
 
     let default_agent = super::agent::resolve_selected_agent(config, task_agent);
     let mut selected_agent = None;
+    let mut use_agent_command = false;
+    let mut apply_agent_prefix = false;
     let command = if raw_command == "<agent>" {
         let agent = default_agent?;
         let command = agent.shell_command();
         selected_agent = Some(agent);
+        use_agent_command = true;
+        command
+    } else if let Some((selector, extra_args)) = parse_agent_placeholder_with_args(raw_command) {
+        let mut agent = match selector {
+            Some(name) => super::agent::resolve_selected_agent(config, Some(name))?,
+            None => default_agent?,
+        };
+        agent.command.append_args_fragment(extra_args);
+        let command = agent.shell_command();
+        selected_agent = Some(agent);
+        use_agent_command = true;
         command
     } else if let Some(name) = raw_command
         .strip_prefix("<agent:")
@@ -162,78 +221,69 @@ pub fn resolve_pane_command_with_config(
         let agent = super::agent::resolve_selected_agent(config, Some(name))?;
         let command = agent.shell_command();
         selected_agent = Some(agent);
+        use_agent_command = true;
         command
-    } else if super::agent::is_known_agent(raw_command) {
-        selected_agent = super::agent::SelectedAgent::from_raw(raw_command);
-        raw_command.to_string()
     } else if default_agent.as_ref().is_some_and(|agent| {
         crate::config::is_agent_command(raw_command, &agent.shell_command())
             || crate::config::is_agent_command(raw_command, agent.kind())
     }) {
+        if let Some(agent) = default_agent.as_ref()
+            && raw_command.starts_with(&agent.command.program)
+            && (!agent.command.env.is_empty()
+                || !agent.command.env_args.is_empty()
+                || !agent.command.env_assignments.is_empty())
+        {
+            apply_agent_prefix = true;
+        }
         selected_agent = default_agent;
+        raw_command.to_string()
+    } else if super::agent::is_known_agent(raw_command) {
+        selected_agent = super::agent::SelectedAgent::from_raw(raw_command);
         raw_command.to_string()
     } else {
         raw_command.to_string()
     };
 
-    let selected_ref = selected_agent.as_ref();
-    let result =
-        adjust_selected_command(&command, prompt_file_path, working_dir, selected_ref, shell);
-    let prompt_injected = matches!(result, Cow::Owned(_));
-    Some(ResolvedCommand {
-        command: result.into_owned(),
+    let prompt_argument = selected_agent.as_ref().and_then(|agent| {
+        prompt_file_path.map(|prompt_path| {
+            let relative = prompt_path.strip_prefix(working_dir).unwrap_or(prompt_path);
+            agent.profile.prompt_argument(&relative.to_string_lossy())
+        })
+    });
+    let prompt_injected = prompt_argument.is_some();
+    if let Some(agent) = selected_agent.as_mut()
+        && let Some(subcmd) = agent.profile.default_subcommand()
+    {
+        agent.command.insert_default_subcommand(subcmd);
+    }
+
+    let mut resolved = ResolvedCommand {
+        command,
         prompt_injected,
         selected_agent,
-    })
+        prompt_argument,
+        posix_shell: is_posix_shell(shell),
+        use_agent_command,
+        apply_agent_prefix,
+    };
+    resolved.command = resolved.render_command();
+    Some(resolved)
 }
 
-fn adjust_selected_command<'a>(
-    command: &'a str,
-    prompt_file_path: Option<&Path>,
-    working_dir: &Path,
-    selected_agent: Option<&SelectedAgent>,
-    shell: &str,
-) -> Cow<'a, str> {
-    if let Some(agent) = selected_agent {
-        if let Some(prompt_path) = prompt_file_path {
-            let relative = prompt_path.strip_prefix(working_dir).unwrap_or(prompt_path);
-            let prompt_path = relative.to_string_lossy();
-            let mut inner_cmd = command.to_string();
-            if let Some(subcmd) = agent.profile.default_subcommand()
-                && needs_default_subcommand(&agent.command.args.join(" "), subcmd)
-            {
-                let command_text = agent.command.shell_string();
-                inner_cmd = inject_flag_after_agent_executable(&command_text, subcmd);
-            }
-            inner_cmd.push(' ');
-            inner_cmd.push_str(&agent.profile.prompt_argument(&prompt_path));
-            return if is_posix_shell(shell) {
-                Cow::Owned(format!(" {}", inner_cmd))
-            } else {
-                Cow::Owned(format!(" {}", wrap_for_non_posix_shell(&inner_cmd)))
-            };
-        }
-        if let Some(subcmd) = agent.profile.default_subcommand()
-            && needs_default_subcommand(&agent.command.args.join(" "), subcmd)
-        {
-            return Cow::Owned(inject_flag_after_agent_executable(command, subcmd));
-        }
+fn parse_agent_placeholder_with_args(raw_command: &str) -> Option<(Option<&str>, &str)> {
+    let rest = raw_command.strip_prefix("<agent")?;
+    let (selector, rest) = if let Some(rest) = rest.strip_prefix(':') {
+        let (name, rest) = rest.split_once('>')?;
+        (Some(name), rest)
+    } else {
+        let rest = rest.strip_prefix('>')?;
+        (None, rest)
+    };
+    let extra_args = rest.trim_start();
+    if extra_args.is_empty() {
+        return None;
     }
-    Cow::Borrowed(command)
-}
-
-/// Check whether a default subcommand needs to be inserted.
-///
-/// Returns `true` when the user's args don't already start with the
-/// subcommand (e.g., "chat"). Flags like `--verbose` are not subcommands,
-/// so the default is still inserted before them.
-fn needs_default_subcommand(rest: &str, subcmd: &str) -> bool {
-    match rest.split_whitespace().next() {
-        None => true,                                  // no args at all
-        Some(first) if first == subcmd => false,       // already has it
-        Some(first) if first.starts_with('-') => true, // flag, not a subcommand
-        Some(_) => false,                              // some other subcommand
-    }
+    Some((selector, extra_args))
 }
 
 /// Escape a string for embedding inside a double-quoted shell context.
@@ -273,58 +323,6 @@ pub fn escape_for_sh_c_inner_single_quote(s: &str) -> String {
 pub fn wrap_for_non_posix_shell(command: &str) -> String {
     let escaped = command.replace('\'', "'\\''");
     format!("sh -c '{}'", escaped)
-}
-
-/// Inject a permissions flag into an agent command string.
-///
-/// Inserts the flag after the real agent executable, looking past `env`
-/// wrappers and `VAR=value` assignments.
-/// For commands like ` claude -- "$(cat PROMPT.md)"`, produces
-/// ` claude --dangerously-skip-permissions -- "$(cat PROMPT.md)"`.
-///
-/// For non-POSIX wrapped commands like ` sh -c 'claude -- ...'`, the flag
-/// is inserted inside the inner command.
-pub fn inject_skip_permissions_flag(command: &str, flag: &str) -> String {
-    // Handle the leading space (history prevention prefix)
-    let trimmed = command.trim_start();
-    let leading_spaces = &command[..command.len() - trimmed.len()];
-
-    // Handle sh -c wrapper (non-POSIX shells)
-    if trimmed.starts_with("sh -c '") && trimmed.ends_with('\'') {
-        let inner = &trimmed[7..trimmed.len() - 1];
-        let inner_unescaped = inner.replace("'\\''", "'");
-        let injected = inject_flag_after_agent_executable(&inner_unescaped, flag);
-        let re_escaped = injected.replace('\'', "'\\''");
-        return format!("{}sh -c '{}'", leading_spaces, re_escaped);
-    }
-
-    format!(
-        "{}{}",
-        leading_spaces,
-        inject_flag_after_agent_executable(trimmed, flag)
-    )
-}
-
-/// Insert a flag after the real agent executable in a command,
-/// handling `env` wrappers and `VAR=value` assignments.
-fn inject_flag_after_agent_executable(command: &str, flag: &str) -> String {
-    let exe_token = super::agent::find_executable_token(command);
-    if exe_token.is_empty() {
-        return format!("{} {}", command, flag);
-    }
-
-    // Use pointer arithmetic to find the token's position in the original string
-    let exe_start = exe_token.as_ptr() as usize - command.as_ptr() as usize;
-    let exe_end = exe_start + exe_token.len();
-
-    let before = &command[..exe_end];
-    let after = &command[exe_end..];
-
-    if after.is_empty() {
-        format!("{} {}", before, flag)
-    } else {
-        format!("{} {}{}", before, flag, after)
-    }
 }
 
 #[cfg(test)]
@@ -477,69 +475,6 @@ mod tests {
         );
     }
 
-    // --- inject_skip_permissions_flag tests ---
-
-    #[test]
-    fn test_inject_skip_permissions_with_prompt() {
-        let result = inject_skip_permissions_flag(
-            " claude -- \"$(cat PROMPT.md)\"",
-            "--dangerously-skip-permissions",
-        );
-        assert_eq!(
-            result,
-            " claude --dangerously-skip-permissions -- \"$(cat PROMPT.md)\""
-        );
-    }
-
-    #[test]
-    fn test_inject_skip_permissions_with_existing_args() {
-        let result = inject_skip_permissions_flag(
-            " claude --verbose -- \"$(cat PROMPT.md)\"",
-            "--dangerously-skip-permissions",
-        );
-        assert_eq!(
-            result,
-            " claude --dangerously-skip-permissions --verbose -- \"$(cat PROMPT.md)\""
-        );
-    }
-
-    #[test]
-    fn test_inject_skip_permissions_bare_command() {
-        let result = inject_skip_permissions_flag("claude", "--dangerously-skip-permissions");
-        assert_eq!(result, "claude --dangerously-skip-permissions");
-    }
-
-    #[test]
-    fn test_inject_skip_permissions_non_posix_shell() {
-        let result = inject_skip_permissions_flag(
-            " sh -c 'claude -- \"$(cat PROMPT.md)\"'",
-            "--dangerously-skip-permissions",
-        );
-        assert_eq!(
-            result,
-            " sh -c 'claude --dangerously-skip-permissions -- \"$(cat PROMPT.md)\"'"
-        );
-    }
-
-    #[test]
-    fn test_inject_skip_permissions_env_wrapped() {
-        let result = inject_skip_permissions_flag(
-            " env -u FOO claude -- \"$(cat PROMPT.md)\"",
-            "--dangerously-skip-permissions",
-        );
-        assert_eq!(
-            result,
-            " env -u FOO claude --dangerously-skip-permissions -- \"$(cat PROMPT.md)\""
-        );
-    }
-
-    #[test]
-    fn test_inject_skip_permissions_env_with_assignments() {
-        let result =
-            inject_skip_permissions_flag("env FOO=bar claude", "--dangerously-skip-permissions");
-        assert_eq!(result, "env FOO=bar claude --dangerously-skip-permissions");
-    }
-
     // --- structured agent resolver tests ---
 
     fn config_with_agent(agent: &str) -> Config {
@@ -688,28 +623,245 @@ mod tests {
         assert!(resolved.selected_agent.is_none());
     }
 
-    // --- needs_default_subcommand tests ---
-
     #[test]
-    fn test_needs_default_subcommand_empty() {
-        assert!(needs_default_subcommand("", "chat"));
+    fn resolve_structured_pane_command_inserts_default_subcommand_before_flags() {
+        let mut config = config_with_agent("kiro");
+        config.agents.insert(
+            "kiro".to_string(),
+            crate::config::AgentEntry {
+                command: Some("kiro-cli".to_string()),
+                agent_type: Some("kiro-cli".to_string()),
+                args: vec!["--verbose".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
+        );
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.command, "kiro-cli chat --verbose");
     }
 
     #[test]
-    fn test_needs_default_subcommand_already_present() {
-        assert!(!needs_default_subcommand("chat", "chat"));
-        assert!(!needs_default_subcommand("chat --model foo", "chat"));
+    fn resolve_structured_pane_command_preserves_existing_subcommand() {
+        let config = config_with_agent("kiro-cli chat --model foo");
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.command, "kiro-cli chat --model foo");
     }
 
     #[test]
-    fn test_needs_default_subcommand_flag() {
-        assert!(needs_default_subcommand("--verbose", "chat"));
-        assert!(needs_default_subcommand("-v", "chat"));
+    fn resolve_structured_pane_command_preserves_other_subcommand() {
+        let config = config_with_agent("kiro-cli login");
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.command, "kiro-cli login");
     }
 
     #[test]
-    fn test_needs_default_subcommand_other_subcommand() {
-        assert!(!needs_default_subcommand("login", "chat"));
-        assert!(!needs_default_subcommand("agent list", "chat"));
+    fn resolve_structured_pane_command_handles_env_wrapped_kiro() {
+        let prompt = PathBuf::from("/tmp/worktree/PROMPT.md");
+        let working_dir = PathBuf::from("/tmp/worktree");
+        let mut config = config_with_agent("kiro-env");
+        config.agents.insert(
+            "kiro-env".to_string(),
+            crate::config::AgentEntry {
+                command: Some("env FOO=bar kiro-cli".to_string()),
+                agent_type: Some("kiro-cli".to_string()),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+            },
+        );
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            Some(&prompt),
+            &working_dir,
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.command,
+            " env FOO=bar kiro-cli chat \"$(cat PROMPT.md)\""
+        );
+    }
+
+    #[test]
+    fn resolve_structured_pane_command_handles_quoted_env_values() {
+        let prompt = PathBuf::from("/tmp/worktree/PROMPT.md");
+        let working_dir = PathBuf::from("/tmp/worktree");
+        let mut config = config_with_agent("cc-env");
+        config.agents.insert(
+            "cc-env".to_string(),
+            crate::config::AgentEntry {
+                command: Some("claude".to_string()),
+                agent_type: Some("claude".to_string()),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::from([(
+                    "FOO".to_string(),
+                    crate::config::AgentEnvValue::Literal("bar baz".to_string()),
+                )]),
+            },
+        );
+        let mut resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            Some(&prompt),
+            &working_dir,
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        let agent = resolved.selected_agent.as_mut().unwrap();
+        agent
+            .command
+            .prepend_args_fragment("--dangerously-skip-permissions");
+        assert_eq!(
+            resolved.render_command(),
+            " env FOO='bar baz' claude --dangerously-skip-permissions -- \"$(cat PROMPT.md)\""
+        );
+    }
+
+    #[test]
+    fn resolve_structured_pane_command_appends_codex_resume_after_args() {
+        let mut config = config_with_agent("codex-mini");
+        config.agents.insert(
+            "codex-mini".to_string(),
+            crate::config::AgentEntry {
+                command: Some("codex".to_string()),
+                agent_type: Some("codex".to_string()),
+                args: vec!["exec".to_string(), "-m".to_string(), "mini".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
+        );
+        let mut resolved = resolve_pane_command_with_config(
+            Some("<agent>"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        let agent = resolved.selected_agent.as_mut().unwrap();
+        agent.command.append_args_fragment("resume --last");
+        assert_eq!(
+            resolved.render_command(),
+            "codex exec -m mini resume --last"
+        );
+    }
+
+    #[test]
+    fn resolve_pane_command_expands_agent_placeholder_with_args() {
+        let config = config_with_agent("claude");
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent> --model sonnet"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.render_command(), "claude --model sonnet");
+    }
+
+    #[test]
+    fn resolve_pane_command_expands_named_agent_placeholder_with_args() {
+        let mut config = config_with_agent("claude");
+        config.agents.insert(
+            "cc-work".to_string(),
+            crate::config::AgentEntry {
+                command: Some("claude".to_string()),
+                agent_type: Some("claude".to_string()),
+                args: vec!["--model".to_string(), "opus".to_string()],
+                env: std::collections::BTreeMap::new(),
+            },
+        );
+        let resolved = resolve_pane_command_with_config(
+            Some("<agent:cc-work> --verbose"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.render_command(), "claude --model opus --verbose");
+    }
+
+    #[test]
+    fn resolve_pane_command_preserves_shell_syntax_in_manual_agent_commands() {
+        let config = config_with_agent("claude");
+        let resolved = resolve_pane_command_with_config(
+            Some("claude --model sonnet > out.txt"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(resolved.render_command(), "claude --model sonnet > out.txt");
+    }
+
+    #[test]
+    fn resolve_pane_command_preserves_config_env_for_manual_agent_commands() {
+        let mut config = config_with_agent("cc-env");
+        config.agents.insert(
+            "cc-env".to_string(),
+            crate::config::AgentEntry {
+                command: Some("claude".to_string()),
+                agent_type: Some("claude".to_string()),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::from([(
+                    "API_KEY".to_string(),
+                    crate::config::AgentEnvValue::Literal("secret".to_string()),
+                )]),
+            },
+        );
+        let resolved = resolve_pane_command_with_config(
+            Some("claude --verbose"),
+            true,
+            None,
+            Path::new("/tmp"),
+            &config,
+            None,
+            "/bin/zsh",
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.render_command(),
+            "env API_KEY=secret claude --verbose"
+        );
     }
 }

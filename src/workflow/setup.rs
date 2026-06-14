@@ -820,6 +820,14 @@ mod tests {
     }
 
     #[test]
+    fn validate_prompt_succeeds_with_quoted_env_agent_command() {
+        let panes = vec![prompt_pane("env FOO='bar baz' claude --verbose")];
+        let config = make_config_with_agent(Some("claude"));
+
+        assert!(validate_prompt(&panes, None, &config, true).is_ok());
+    }
+
+    #[test]
     fn resolve_pane_configuration_typed_agent_returns_original() {
         let original_panes = vec![config::PaneConfig {
             command: Some("claudeg --dangerously-skip-permissions".to_string()),

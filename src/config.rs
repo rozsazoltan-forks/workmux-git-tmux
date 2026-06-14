@@ -2987,9 +2987,9 @@ pub fn is_agent_command(command_line: &str, agent_command: &str) -> bool {
         return false;
     }
 
-    let resolved_cmd = resolve_executable_path(cmd_token).unwrap_or_else(|| cmd_token.to_string());
+    let resolved_cmd = resolve_executable_path(&cmd_token).unwrap_or_else(|| cmd_token.to_string());
     let resolved_agent =
-        resolve_executable_path(agent_token).unwrap_or_else(|| agent_token.to_string());
+        resolve_executable_path(&agent_token).unwrap_or_else(|| agent_token.to_string());
 
     let cmd_stem = Path::new(&resolved_cmd).file_stem();
     let agent_stem = Path::new(&resolved_agent).file_stem();

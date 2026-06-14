@@ -496,41 +496,32 @@ pub trait Multiplexer: Send + Sync {
 
                 handshake.wait()?;
 
-                // Inject resume/continue flag for agent panes when requested
-                if is_agent_pane {
+                // Inject resume/continue arguments for agent panes when requested
+                if let Some(selected_agent) = resolved.selected_agent.as_mut() {
                     match &options.resume_mode {
                         crate::multiplexer::types::ResumeMode::Continue => {
-                            if let Some(selected_agent) = resolved.selected_agent.as_ref() {
-                                let profile = selected_agent.profile;
-                                if let Some(flag) = profile.continue_flag() {
-                                    resolved.command =
-                                        util::inject_skip_permissions_flag(&resolved.command, flag);
-                                } else {
-                                    tracing::warn!(
-                                        agent = profile.name(),
-                                        "agent does not support --continue, flag ignored"
-                                    );
-                                }
+                            let profile = selected_agent.profile;
+                            if let Some(flag) = profile.continue_flag() {
+                                selected_agent.command.append_args_fragment(flag);
+                            } else {
+                                tracing::warn!(
+                                    agent = profile.name(),
+                                    "agent does not support --continue, flag ignored"
+                                );
                             }
                         }
                         crate::multiplexer::types::ResumeMode::ForkSession(session_id) => {
-                            if let Some(selected_agent) = resolved.selected_agent.as_ref() {
-                                let agent_name = selected_agent.kind();
-                                if let Some(forker) =
-                                    crate::multiplexer::conversation::resolve_forker(agent_name)
-                                {
-                                    let resume_args = forker.resume_args(session_id);
-                                    let combined = resume_args.join(" ");
-                                    resolved.command = util::inject_skip_permissions_flag(
-                                        &resolved.command,
-                                        &combined,
-                                    );
-                                } else {
-                                    tracing::warn!(
-                                        agent = agent_name,
-                                        "agent does not support forking, resume flag ignored"
-                                    );
-                                }
+                            let agent_name = selected_agent.kind();
+                            if let Some(forker) =
+                                crate::multiplexer::conversation::resolve_forker(agent_name)
+                            {
+                                let resume_args = forker.resume_args(session_id);
+                                selected_agent.command.args.extend(resume_args);
+                            } else {
+                                tracing::warn!(
+                                    agent = agent_name,
+                                    "agent does not support forking, resume flag ignored"
+                                );
                             }
                         }
                         crate::multiplexer::types::ResumeMode::None => {}
@@ -550,19 +541,15 @@ pub trait Multiplexer: Send + Sync {
                         // Inject skip-permissions flag for agent panes only
                         // (sandbox provides the security boundary, so permission
                         // prompts are unnecessary and break autonomous workflow)
-                        let command_to_wrap = if is_agent_pane {
-                            if let Some(selected_agent) = resolved.selected_agent.as_ref() {
+                        let command_to_wrap =
+                            if let Some(selected_agent) = resolved.selected_agent.as_mut() {
                                 if let Some(flag) = selected_agent.profile.skip_permissions_flag() {
-                                    util::inject_skip_permissions_flag(&resolved.command, flag)
-                                } else {
-                                    resolved.command.clone()
+                                    selected_agent.command.prepend_args_fragment(flag);
                                 }
+                                resolved.render_command()
                             } else {
                                 resolved.command.clone()
-                            }
-                        } else {
-                            resolved.command.clone()
-                        };
+                            };
 
                         // Choose backend based on config
                         let wrap_result = match config.sandbox.backend() {
@@ -602,10 +589,10 @@ pub trait Multiplexer: Send + Sync {
                             }
                         }
                     } else {
-                        resolved.command.clone()
+                        resolved.render_command()
                     }
                 } else {
-                    resolved.command.clone()
+                    resolved.render_command()
                 };
 
                 let _ = self.clear_pane(&spawned_id);

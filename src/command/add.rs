@@ -50,8 +50,11 @@ fn generate_branch_name_with_spinner(
         .and_then(|c| c.command.as_deref())
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let profile_command =
-        crate::multiplexer::agent::resolve_profile(config.agent.as_deref()).auto_name_command();
+    let profile_command = crate::multiplexer::agent::resolve_profile_with_type(
+        config.agent.as_deref(),
+        config.agent_type.as_deref(),
+    )
+    .auto_name_command();
     let effective_command = config_command.or(profile_command);
 
     tracing::info!(

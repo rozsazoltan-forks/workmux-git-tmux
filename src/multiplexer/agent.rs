@@ -327,10 +327,7 @@ pub fn resolve_profile_for_display(agent_command: Option<&str>) -> &'static dyn 
     };
 
     let token = find_executable_token(cmd);
-    let stem = Path::new(token)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(token);
+    let stem = executable_stem(&token);
 
     PROFILES
         .iter()
@@ -365,16 +362,67 @@ pub struct AgentCommand {
     pub program: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, AgentEnvValue>,
+    pub env_args: Vec<String>,
+    pub env_assignments: Vec<String>,
 }
 
 impl AgentCommand {
     pub fn parse(command: &str) -> Option<Self> {
         let parts = shlex::split(command)?;
-        let (program, args) = parts.split_first()?;
+        let mut iter = parts.into_iter();
+        let first = iter.next()?;
+        let env = BTreeMap::new();
+        let mut env_args = Vec::new();
+        let mut env_assignments = Vec::new();
+        let program;
+
+        if executable_stem(&first) == "env" {
+            program = loop {
+                let Some(token) = iter.next() else {
+                    return Some(Self {
+                        program: first,
+                        args: env_args,
+                        env,
+                        env_args: Vec::new(),
+                        env_assignments,
+                    });
+                };
+
+                if env_flag_takes_value(&token) {
+                    env_args.push(token);
+                    if let Some(value) = iter.next() {
+                        env_args.push(value);
+                    }
+                    continue;
+                }
+                if token.starts_with('-') {
+                    env_args.push(token);
+                    continue;
+                }
+                if env_assignment(&token).is_some() {
+                    env_assignments.push(token);
+                    continue;
+                }
+                break token;
+            };
+        } else {
+            let mut token = first;
+            loop {
+                if env_assignment(&token).is_none() {
+                    program = token;
+                    break;
+                }
+                env_assignments.push(token);
+                token = iter.next()?;
+            }
+        }
+
         Some(Self {
-            program: program.clone(),
-            args: args.to_vec(),
-            env: BTreeMap::new(),
+            program,
+            args: iter.collect(),
+            env,
+            env_args,
+            env_assignments,
         })
     }
 
@@ -387,6 +435,8 @@ impl AgentCommand {
                 program: entry.agent_type.clone().unwrap_or_else(|| name.to_string()),
                 args: Vec::new(),
                 env: BTreeMap::new(),
+                env_args: Vec::new(),
+                env_assignments: Vec::new(),
             });
         command.args.extend(entry.args.clone());
         command.env.extend(entry.env.clone());
@@ -395,8 +445,10 @@ impl AgentCommand {
 
     pub fn shell_string(&self) -> String {
         let mut parts = Vec::new();
-        if !self.env.is_empty() {
+        if !self.env_args.is_empty() || !self.env_assignments.is_empty() || !self.env.is_empty() {
             parts.push("env".to_string());
+            parts.extend(self.env_args.iter().map(|arg| shell_quote(arg)));
+            parts.extend(self.env_assignments.iter().cloned());
             for (key, value) in &self.env {
                 parts.push(format!("{}={}", key, value.shell_value()));
             }
@@ -404,6 +456,31 @@ impl AgentCommand {
         parts.push(shell_quote(&self.program));
         parts.extend(self.args.iter().map(|arg| shell_quote(arg)));
         parts.join(" ")
+    }
+
+    pub fn prepend_args_fragment(&mut self, fragment: &str) {
+        if let Some(mut args) = shlex::split(fragment) {
+            args.extend(std::mem::take(&mut self.args));
+            self.args = args;
+        }
+    }
+
+    pub fn append_args_fragment(&mut self, fragment: &str) {
+        if let Some(args) = shlex::split(fragment) {
+            self.args.extend(args);
+        }
+    }
+
+    pub fn insert_default_subcommand(&mut self, subcmd: &str) {
+        let needs_subcmd = match self.args.first() {
+            None => true,
+            Some(first) if first == subcmd => false,
+            Some(first) if first.starts_with('-') => true,
+            Some(_) => false,
+        };
+        if needs_subcmd {
+            self.args.insert(0, subcmd.to_string());
+        }
     }
 }
 
@@ -463,81 +540,44 @@ fn extract_executable_stem(command: &str) -> String {
 
     // Resolve the path to handle symlinks and aliases
     let resolved =
-        crate::config::resolve_executable_path(token).unwrap_or_else(|| token.to_string());
+        crate::config::resolve_executable_path(&token).unwrap_or_else(|| token.to_string());
 
-    // Extract stem from the resolved path
-    Path::new(&resolved)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string()
+    executable_stem(&resolved).to_string()
 }
 
 /// Find the real executable token in a command string, skipping past
 /// `env` wrappers and `VAR=value` assignments.
-///
-/// Returns a reference into the original command string.
-pub(crate) fn find_executable_token(command: &str) -> &str {
-    let mut iter = command.split_whitespace();
-
-    let first = match iter.next() {
-        Some(t) => t,
-        None => return "",
-    };
-
-    // Check if first token is a VAR=value assignment
-    if is_env_assignment(first) {
-        for token in iter {
-            if is_env_assignment(token) {
-                continue;
-            }
-            return token;
-        }
-        return first; // fallback
-    }
-
-    // Check if first token is `env`
-    let first_stem = Path::new(first)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-
-    if first_stem != "env" {
-        return first; // not a wrapper
-    }
-
-    // Skip env's own flags and arguments
-    let mut skip_next = false;
-    for token in iter {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if token.starts_with('-') {
-            // Flags that take a value argument
-            if matches!(token, "-u" | "-S" | "-P" | "--unset") {
-                skip_next = true;
-            }
-            continue;
-        }
-        if is_env_assignment(token) {
-            continue;
-        }
-        return token; // found the real executable
-    }
-
-    first // fallback to "env" if nothing found
+pub(crate) fn find_executable_token(command: &str) -> String {
+    AgentCommand::parse(command)
+        .map(|command| command.program)
+        .unwrap_or_default()
 }
 
-/// Check if a token looks like an environment variable assignment (VAR=value).
-fn is_env_assignment(token: &str) -> bool {
-    token.contains('=')
-        && !token.starts_with('-')
-        && !token.starts_with('/')
-        && token
+fn executable_stem(program: &str) -> &str {
+    Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+}
+
+fn env_flag_takes_value(token: &str) -> bool {
+    matches!(token, "-u" | "-S" | "-P" | "--unset")
+}
+
+fn env_assignment(token: &str) -> Option<(&str, &str)> {
+    let (key, value) = token.split_once('=')?;
+    if key.is_empty()
+        || token.starts_with('-')
+        || token.starts_with('/')
+        || !key
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some((key, value))
 }
 
 #[cfg(test)]
@@ -913,11 +953,30 @@ mod tests {
                     AgentEnvValue::Literal("https://api.deepseek.com/anthropic".to_string()),
                 ),
             ]),
+            env_args: Vec::new(),
+            env_assignments: Vec::new(),
         };
 
         assert_eq!(
             command.shell_string(),
             "env ANTHROPIC_AUTH_TOKEN=\"$DEEPSEEK_API_KEY\" ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic claude --dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_command_preserves_shell_env_assignment_expansion() {
+        let command = AgentCommand::parse("env CLAUDE_CONFIG_DIR=~/.claude-personal claude")
+            .expect("command parses");
+        assert_eq!(
+            command.shell_string(),
+            "env CLAUDE_CONFIG_DIR=~/.claude-personal claude"
+        );
+
+        let command = AgentCommand::parse("ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN claude")
+            .expect("command parses");
+        assert_eq!(
+            command.shell_string(),
+            "env ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN claude"
         );
     }
 }
