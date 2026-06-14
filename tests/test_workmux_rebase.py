@@ -10,6 +10,7 @@ from .conftest import (
     run_workmux_command,
     write_workmux_config,
 )
+from .support.remote_base import setup_worktree_with_remote_only_base
 
 
 def run_workmux_rebase(
@@ -111,18 +112,10 @@ def test_rebase_falls_back_to_main_when_base_is_remote_only(
 ):
     env = mux_server
     branch_name = "feature/rebase-remote-base"
-    remote_base = "origin/remote-base"
-    write_workmux_config(repo_path, env=env)
-
-    env.run_command(
-        ["git", "update-ref", f"refs/remotes/{remote_base}", "HEAD"], cwd=repo_path
+    worktree = setup_worktree_with_remote_only_base(
+        env, workmux_exe_path, repo_path, branch_name
     )
-    run_workmux_add(env, workmux_exe_path, repo_path, branch_name)
-    worktree_path = get_worktree_path(repo_path, branch_name)
-    env.run_command(
-        ["git", "config", "--local", f"branch.{branch_name}.workmux-base", remote_base],
-        cwd=repo_path,
-    )
+    worktree_path = worktree.path
 
     main_file = repo_path / "main_rebase_fallback.txt"
     main_file.write_text("main fallback")

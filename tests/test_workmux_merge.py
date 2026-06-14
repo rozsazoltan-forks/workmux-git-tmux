@@ -11,6 +11,7 @@ from .conftest import (
     write_global_workmux_config,
     write_workmux_config,
 )
+from .support.remote_base import setup_worktree_with_remote_only_base
 
 
 def test_merge_default_strategy_succeeds_and_cleans_up(
@@ -609,18 +610,10 @@ def test_merge_falls_back_to_main_when_base_is_remote_only(
     """Verifies merge ignores remote-only stored base refs."""
     env = mux_server
     branch_name = "feature/remote-base-child"
-    remote_base = "origin/remote-base"
-    write_workmux_config(repo_path, env=env)
-
-    env.run_command(
-        ["git", "update-ref", f"refs/remotes/{remote_base}", "HEAD"], cwd=repo_path
+    worktree = setup_worktree_with_remote_only_base(
+        env, workmux_exe_path, repo_path, branch_name
     )
-    run_workmux_add(env, workmux_exe_path, repo_path, branch_name)
-    worktree_path = get_worktree_path(repo_path, branch_name)
-    env.run_command(
-        ["git", "config", "--local", f"branch.{branch_name}.workmux-base", remote_base],
-        cwd=repo_path,
-    )
+    worktree_path = worktree.path
 
     commit_msg = "feat: remote base child work"
     create_commit(env, worktree_path, commit_msg)
