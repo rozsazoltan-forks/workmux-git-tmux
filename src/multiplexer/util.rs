@@ -36,6 +36,13 @@ pub fn is_posix_shell(shell: &str) -> bool {
     matches!(shell_name, "bash" | "zsh" | "sh" | "dash" | "ksh" | "ash")
 }
 
+/// Return the last `lines` lines from terminal output.
+pub fn tail_lines(output: &str, lines: u16) -> String {
+    let all_lines: Vec<&str> = output.lines().collect();
+    let start = all_lines.len().saturating_sub(lines as usize);
+    all_lines[start..].join("\n")
+}
+
 /// Build a `LivePaneInfo` from shared pane fields.
 pub fn build_live_pane_info(
     pid: Option<u32>,
@@ -326,6 +333,13 @@ mod tests {
     use std::path::PathBuf;
 
     // --- prefixed tests ---
+
+    #[test]
+    fn test_tail_lines() {
+        assert_eq!(tail_lines("one\ntwo\nthree", 2), "two\nthree");
+        assert_eq!(tail_lines("one\ntwo\nthree", 10), "one\ntwo\nthree");
+        assert_eq!(tail_lines("", 5), "");
+    }
 
     #[test]
     fn test_prefixed() {

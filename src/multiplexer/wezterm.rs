@@ -605,10 +605,7 @@ impl Multiplexer for WezTermBackend {
             .run_and_capture_stdout()
             .ok()?;
 
-        // get-text returns all scrollback; take last N lines
-        let all_lines: Vec<&str> = output.lines().collect();
-        let start = all_lines.len().saturating_sub(lines as usize);
-        Some(all_lines[start..].join("\n"))
+        Some(util::tail_lines(&output, lines))
     }
 
     // === Text I/O ===
