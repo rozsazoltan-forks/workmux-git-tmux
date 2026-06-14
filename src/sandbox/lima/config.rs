@@ -270,6 +270,45 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn default_test_mounts() -> Vec<Mount> {
+        vec![Mount::rw(PathBuf::from("/tmp/test"))]
+    }
+
+    fn generate_test_yaml(sandbox_config: &SandboxConfig, agent: &str, with_nix: bool) -> String {
+        generate_lima_config(
+            "test-vm",
+            &default_test_mounts(),
+            sandbox_config,
+            agent,
+            with_nix,
+        )
+        .unwrap()
+    }
+
+    struct ParsedLimaConfig {
+        value: serde_yaml::Value,
+    }
+
+    impl ParsedLimaConfig {
+        fn parse(yaml: &str) -> Self {
+            Self {
+                value: serde_yaml::from_str(yaml).unwrap(),
+            }
+        }
+
+        fn provisions(&self) -> &serde_yaml::Sequence {
+            self.value["provision"].as_sequence().unwrap()
+        }
+
+        fn images(&self) -> &serde_yaml::Sequence {
+            self.value["images"].as_sequence().unwrap()
+        }
+
+        fn first_image(&self) -> &serde_yaml::Value {
+            &self.images()[0]
+        }
+    }
+
     #[test]
     fn test_generate_lima_config() {
         let mounts = vec![
@@ -298,10 +337,8 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_provision_scripts() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig::default();
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
 
         // System provision installs dependencies
         assert!(yaml.contains("mode: system"));
@@ -327,19 +364,15 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_default_provision_count() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig::default();
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let provisions = parsed["provision"].as_sequence().unwrap();
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let provisions = parsed.provisions();
         assert_eq!(provisions.len(), 2, "default should have 2 provision steps");
     }
 
     #[test]
     fn test_generate_lima_config_custom_provision() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig {
             lima: crate::config::LimaConfig {
                 provision: Some("sudo apt-get install -y ripgrep\necho done".to_string()),
@@ -347,11 +380,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let provisions = parsed["provision"].as_sequence().unwrap();
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let provisions = parsed.provisions();
         assert_eq!(
             provisions.len(),
             3,
@@ -367,17 +398,13 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_custom_image() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig {
             image: Some("file:///Users/me/.lima/images/workmux-golden.qcow2".to_string()),
             ..Default::default()
         };
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let images = parsed["images"].as_sequence().unwrap();
-        let image = &images[0];
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let image = parsed.first_image();
         assert_eq!(
             image["location"].as_str().unwrap(),
             "file:///Users/me/.lima/images/workmux-golden.qcow2"
@@ -388,14 +415,10 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_default_image() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig::default();
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let images = parsed["images"].as_sequence().unwrap();
-        let image = &images[0];
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let image = parsed.first_image();
         let location = image["location"].as_str().unwrap();
         assert!(location.contains("debian-12-genericcloud"));
         assert!(image["arch"].as_str().is_some());
@@ -403,7 +426,6 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_skip_default_provision() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig {
             lima: crate::config::LimaConfig {
                 skip_default_provision: Some(true),
@@ -411,11 +433,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let provisions = parsed["provision"].as_sequence().unwrap();
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let provisions = parsed.provisions();
         assert_eq!(
             provisions.len(),
             0,
@@ -427,7 +447,6 @@ mod tests {
 
     #[test]
     fn test_generate_lima_config_skip_default_provision_with_custom() {
-        let mounts = vec![Mount::rw(PathBuf::from("/tmp/test"))];
         let sandbox_config = SandboxConfig {
             lima: crate::config::LimaConfig {
                 skip_default_provision: Some(true),
@@ -436,11 +455,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let yaml =
-            generate_lima_config("test-vm", &mounts, &sandbox_config, "claude", true).unwrap();
-
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        let provisions = parsed["provision"].as_sequence().unwrap();
+        let yaml = generate_test_yaml(&sandbox_config, "claude", true);
+        let parsed = ParsedLimaConfig::parse(&yaml);
+        let provisions = parsed.provisions();
         assert_eq!(
             provisions.len(),
             1,
