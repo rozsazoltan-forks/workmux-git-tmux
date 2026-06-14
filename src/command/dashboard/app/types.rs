@@ -1,6 +1,6 @@
 //! Data types for the dashboard application state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::git::GitStatus;
@@ -193,6 +193,67 @@ pub struct AddWorktreeState {
     pub pr_list: Option<PrListState>,
     /// Monotonic counter to discard stale PR list results.
     pub pr_request_counter: u64,
+}
+
+/// Outcome of cycling tab completion through branch name candidates.
+pub struct BranchCompletion {
+    pub branch: String,
+    /// Picker cursor when the create row occupies index 0.
+    pub picker_cursor: Option<usize>,
+}
+
+/// Cycle tab completion to the next fuzzy-matching branch name.
+///
+/// `exclude_branches` omits occupied branches from candidates (primary picker only).
+pub fn cycle_branch_completion(
+    branches: &[String],
+    tab_prefix: &mut Option<String>,
+    filter: &mut String,
+    exclude_branches: Option<&HashSet<String>>,
+) -> Option<BranchCompletion> {
+    if tab_prefix.is_none() {
+        *tab_prefix = Some(filter.clone());
+    }
+
+    let prefix = tab_prefix.as_deref().unwrap_or(filter.as_str());
+    let lower = prefix.to_lowercase();
+
+    let candidates: Vec<usize> = branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| {
+            fuzzy_match(&lower, &b.to_lowercase())
+                && exclude_branches.is_none_or(|ex| !ex.contains(*b))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let current_pos = candidates.iter().position(|&idx| branches[idx] == *filter);
+
+    let next = match current_pos {
+        Some(pos) => (pos + 1) % candidates.len(),
+        None => 0,
+    };
+
+    let branch = branches[candidates[next]].clone();
+    Some(BranchCompletion {
+        branch,
+        picker_cursor: exclude_branches.map(|_| next + 1),
+    })
+}
+
+/// Background worktree creation job for the add-worktree modal.
+pub enum AddWorktreeJob {
+    CreateBranch {
+        name: String,
+        base_branch: Option<String>,
+    },
+    CheckoutPr {
+        pr_number: u32,
+    },
 }
 
 /// Fuzzy subsequence match: every character in `query` must appear in `target` in order.

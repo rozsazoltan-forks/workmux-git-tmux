@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Context as _;
 
 use crate::git;
+use crate::multiplexer::Multiplexer;
 use crate::workflow;
 
 use super::super::agent;
@@ -42,6 +44,128 @@ fn default_add_worktree_base(repo_path: &Path) -> String {
         })
         .or_else(|| git::get_default_branch_in(Some(repo_path)).ok())
         .unwrap_or_else(|| "main".to_string())
+}
+
+fn list_branches_for_status(app: &mut App, repo_path: &Path) -> Option<Vec<String>> {
+    match git::list_local_branches_in(Some(repo_path)) {
+        Ok(branches) => Some(branches),
+        Err(_) => {
+            app.status_message = Some((
+                "Failed to list branches".to_string(),
+                std::time::Instant::now(),
+            ));
+            None
+        }
+    }
+}
+
+fn run_add_worktree_job(
+    job: AddWorktreeJob,
+    repo_path: PathBuf,
+    mux: Arc<dyn Multiplexer>,
+) -> anyhow::Result<String> {
+    match job {
+        AddWorktreeJob::CreateBranch { name, base_branch } => {
+            let (config, config_location) =
+                crate::config::Config::load_with_location_from(&repo_path, None)?;
+            let ctx = workflow::WorkflowContext::new_in(
+                &repo_path,
+                config.clone(),
+                mux,
+                config_location,
+            )?;
+            let handle = crate::naming::derive_handle(&name, None, &config)?;
+            let mut options = workflow::types::SetupOptions::new(true, true, true);
+            options.focus_window = false;
+            options.mode = config.mode();
+
+            let result = workflow::create(
+                &ctx,
+                workflow::CreateArgs {
+                    branch_name: &name,
+                    handle: &handle,
+                    base_branch: base_branch.as_deref(),
+                    remote_branch: None,
+                    pr_number: None,
+                    prompt: None,
+                    options,
+                    mode_override: None,
+                    agent: None,
+                    is_explicit_name: false,
+                    prompt_file_only: false,
+                    fork_source: None,
+                },
+            )?;
+            Ok(result.branch_name)
+        }
+        AddWorktreeJob::CheckoutPr { pr_number } => {
+            let (config, config_location) =
+                crate::config::Config::load_with_location_from(&repo_path, None)?;
+
+            let pr_details = crate::github::get_pr_details_in(Some(&repo_path), pr_number)
+                .with_context(|| format!("Failed to fetch PR #{}", pr_number))?;
+
+            let current_repo_owner = git::get_repo_owner_in(Some(&repo_path))
+                .context("Failed to determine repository owner")?;
+            let is_fork = pr_details.is_fork(&current_repo_owner);
+            let fork_owner = &pr_details.head_repository_owner.login;
+
+            let remote_name = if is_fork {
+                git::ensure_fork_remote_in(fork_owner, Some(&repo_path))?
+            } else {
+                "origin".to_string()
+            };
+
+            let local_branch = if is_fork {
+                format!("{}-{}", fork_owner, pr_details.head_ref_name)
+            } else {
+                pr_details.head_ref_name.clone()
+            };
+            let remote_branch = format!("{}/{}", remote_name, pr_details.head_ref_name);
+
+            let ctx = workflow::WorkflowContext::new_in(
+                &repo_path,
+                config.clone(),
+                mux,
+                config_location,
+            )?;
+            let handle = crate::naming::derive_handle(&local_branch, None, &config)?;
+            let mut options = workflow::types::SetupOptions::new(true, true, true);
+            options.focus_window = false;
+            options.mode = config.mode();
+
+            let result = workflow::create(
+                &ctx,
+                workflow::CreateArgs {
+                    branch_name: &local_branch,
+                    handle: &handle,
+                    base_branch: None,
+                    remote_branch: Some(&remote_branch),
+                    pr_number: Some(pr_number),
+                    prompt: None,
+                    options,
+                    mode_override: None,
+                    agent: None,
+                    is_explicit_name: false,
+                    prompt_file_only: false,
+                    fork_source: None,
+                },
+            )?;
+            Ok(result.branch_name)
+        }
+    }
+}
+
+fn spawn_add_worktree_job(
+    job: AddWorktreeJob,
+    repo_path: PathBuf,
+    mux: Arc<dyn Multiplexer>,
+    tx: mpsc::Sender<AppEvent>,
+) {
+    std::thread::spawn(move || {
+        let result = run_add_worktree_job(job, repo_path, mux).map_err(|e| e.to_string());
+        let _ = tx.send(AppEvent::AddWorktreeResult(result));
+    });
 }
 
 impl App {
@@ -621,15 +745,8 @@ impl App {
         };
 
         // List local branches, excluding the worktree's own branch
-        let branches = match git::list_local_branches_in(Some(&repo_path)) {
-            Ok(b) => b,
-            Err(_) => {
-                self.status_message = Some((
-                    "Failed to list branches".to_string(),
-                    std::time::Instant::now(),
-                ));
-                return;
-            }
+        let Some(branches) = list_branches_for_status(self, &repo_path) else {
+            return;
         };
         let mut branches: Vec<_> = branches
             .into_iter()
@@ -804,15 +921,8 @@ impl App {
             return;
         };
 
-        let branches = match git::list_local_branches_in(Some(&repo_path)) {
-            Ok(b) => b,
-            Err(_) => {
-                self.status_message = Some((
-                    "Failed to list branches".to_string(),
-                    std::time::Instant::now(),
-                ));
-                return;
-            }
+        let Some(branches) = list_branches_for_status(self, &repo_path) else {
+            return;
         };
 
         let default_branch = default_add_worktree_base(&repo_path);
@@ -912,41 +1022,17 @@ impl App {
             return;
         }
 
-        // Save the original typed text on first Tab press
-        if state.tab_prefix.is_none() {
-            state.tab_prefix = Some(state.filter.clone());
+        if let Some(completion) = cycle_branch_completion(
+            &state.branches,
+            &mut state.tab_prefix,
+            &mut state.filter,
+            Some(&state.occupied_branches),
+        ) {
+            state.filter = completion.branch;
+            if let Some(cursor) = completion.picker_cursor {
+                state.cursor = cursor;
+            }
         }
-
-        let prefix = state.tab_prefix.as_deref().unwrap_or(&state.filter);
-        let lower = prefix.to_lowercase();
-
-        // Tab uses the same fuzzy matching as the filter list
-        let candidates: Vec<usize> = state
-            .branches
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| {
-                crate::command::dashboard::app::types::fuzzy_match(&lower, &b.to_lowercase())
-                    && !state.occupied_branches.contains(*b)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if candidates.is_empty() {
-            return;
-        }
-
-        // Find current position among candidates
-        let current_pos = candidates
-            .iter()
-            .position(|&idx| state.branches[idx] == state.filter);
-
-        let next = match current_pos {
-            Some(pos) => (pos + 1) % candidates.len(),
-            None => 0,
-        };
-
-        state.filter = state.branches[candidates[next]].clone();
-        state.cursor = next + 1; // +1 because cursor 0 is "Create" row
     }
 
     /// Toggle between Branch and PR modes (Ctrl+p).
@@ -1020,38 +1106,14 @@ impl App {
             return;
         };
 
-        if state.base_tab_prefix.is_none() {
-            state.base_tab_prefix = Some(state.base_filter.clone());
+        if let Some(completion) = cycle_branch_completion(
+            &state.branches,
+            &mut state.base_tab_prefix,
+            &mut state.base_filter,
+            None,
+        ) {
+            state.base_filter = completion.branch;
         }
-
-        let prefix = state
-            .base_tab_prefix
-            .as_deref()
-            .unwrap_or(&state.base_filter);
-        let lower = prefix.to_lowercase();
-        let candidates: Vec<usize> = state
-            .branches
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| {
-                crate::command::dashboard::app::types::fuzzy_match(&lower, &b.to_lowercase())
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if candidates.is_empty() {
-            return;
-        }
-
-        let current_pos = candidates
-            .iter()
-            .position(|&idx| state.branches[idx] == state.base_filter);
-
-        let next = match current_pos {
-            Some(pos) => (pos + 1) % candidates.len(),
-            None => 0,
-        };
-
-        state.base_filter = state.branches[candidates[next]].clone();
     }
 
     /// Append a character to the base branch filter.
@@ -1149,76 +1211,12 @@ impl App {
 
     /// Checkout a PR in a background thread (quiet, no stdout/spinner).
     fn do_checkout_pr(&mut self, pr_number: u32, repo_path: PathBuf) {
-        let mux = self.mux.clone();
-        let tx = self.event_tx.clone();
-
-        std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<String> {
-                let (config, config_location) =
-                    crate::config::Config::load_with_location_from(&repo_path, None)?;
-
-                // Quiet PR resolution (no println/spinner like resolve_pr_ref)
-                let pr_details = crate::github::get_pr_details_in(Some(&repo_path), pr_number)
-                    .with_context(|| format!("Failed to fetch PR #{}", pr_number))?;
-
-                let current_repo_owner = git::get_repo_owner_in(Some(&repo_path))
-                    .context("Failed to determine repository owner")?;
-                let is_fork = pr_details.is_fork(&current_repo_owner);
-                let fork_owner = &pr_details.head_repository_owner.login;
-
-                let remote_name = if is_fork {
-                    git::ensure_fork_remote_in(fork_owner, Some(&repo_path))?
-                } else {
-                    "origin".to_string()
-                };
-
-                let local_branch = if is_fork {
-                    format!("{}-{}", fork_owner, pr_details.head_ref_name)
-                } else {
-                    pr_details.head_ref_name.clone()
-                };
-                let remote_branch = format!("{}/{}", remote_name, pr_details.head_ref_name);
-
-                let ctx = workflow::WorkflowContext::new_in(
-                    &repo_path,
-                    config.clone(),
-                    mux,
-                    config_location,
-                )?;
-                let handle = crate::naming::derive_handle(&local_branch, None, &config)?;
-                let mut options = workflow::types::SetupOptions::new(true, true, true);
-                options.focus_window = false;
-                options.mode = config.mode();
-
-                let result = workflow::create(
-                    &ctx,
-                    workflow::CreateArgs {
-                        branch_name: &local_branch,
-                        handle: &handle,
-                        base_branch: None,
-                        remote_branch: Some(&remote_branch),
-                        pr_number: Some(pr_number),
-                        prompt: None,
-                        options,
-                        mode_override: None,
-                        agent: None,
-                        is_explicit_name: false,
-                        prompt_file_only: false,
-                        fork_source: None,
-                    },
-                )?;
-                Ok(result.branch_name)
-            })();
-
-            match result {
-                Ok(branch) => {
-                    let _ = tx.send(AppEvent::AddWorktreeResult(Ok(branch)));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::AddWorktreeResult(Err(e.to_string())));
-                }
-            }
-        });
+        spawn_add_worktree_job(
+            AddWorktreeJob::CheckoutPr { pr_number },
+            repo_path,
+            self.mux.clone(),
+            self.event_tx.clone(),
+        );
 
         self.status_message = Some((
             format!("Checking out PR #{}...", pr_number),
@@ -1233,56 +1231,13 @@ impl App {
         base_branch: Option<String>,
         repo_path: PathBuf,
     ) {
-        let mux = self.mux.clone();
-        let tx = self.event_tx.clone();
         let status_name = name.clone();
-
-        std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<String> {
-                let (config, config_location) =
-                    crate::config::Config::load_with_location_from(&repo_path, None)?;
-                let ctx = workflow::WorkflowContext::new_in(
-                    &repo_path,
-                    config.clone(),
-                    mux,
-                    config_location,
-                )?;
-                let handle = crate::naming::derive_handle(&name, None, &config)?;
-                let mut options = workflow::types::SetupOptions::new(true, true, true);
-                options.focus_window = false;
-                options.mode = config.mode();
-
-                let result = workflow::create(
-                    &ctx,
-                    workflow::CreateArgs {
-                        branch_name: &name,
-                        handle: &handle,
-                        base_branch: base_branch.as_deref(),
-                        remote_branch: None,
-                        pr_number: None,
-                        prompt: None,
-                        options,
-                        mode_override: None,
-                        agent: None,
-                        is_explicit_name: false,
-                        prompt_file_only: false,
-                        fork_source: None,
-                    },
-                )?;
-                Ok(result.branch_name)
-            })();
-
-            match result {
-                Ok(branch) => {
-                    // Trigger worktree list refresh by sending a refetch
-                    // The main loop will pick this up and refresh
-                    let _ = tx.send(AppEvent::AddWorktreeResult(Ok(branch)));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::AddWorktreeResult(Err(e.to_string())));
-                }
-            }
-        });
+        spawn_add_worktree_job(
+            AddWorktreeJob::CreateBranch { name, base_branch },
+            repo_path,
+            self.mux.clone(),
+            self.event_tx.clone(),
+        );
 
         self.status_message = Some((
             format!("Creating worktree '{}'...", status_name),
