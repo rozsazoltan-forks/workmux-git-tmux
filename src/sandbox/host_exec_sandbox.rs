@@ -113,6 +113,15 @@ fn extra_xdg_deny_dirs(home: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+fn configure_host_exec_child(cmd: &mut Command, worktree: &Path, envs: &HashMap<String, String>) {
+    cmd.current_dir(worktree);
+    cmd.env_clear();
+    cmd.envs(envs);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+}
+
 /// Spawn a command inside an OS-native sandbox.
 ///
 /// On macOS, uses `sandbox-exec`. On Linux, uses `bwrap` resolved from
@@ -157,12 +166,7 @@ fn spawn_unsandboxed(
 ) -> Result<Child> {
     let mut cmd = Command::new(program);
     cmd.args(args);
-    cmd.current_dir(worktree);
-    cmd.env_clear();
-    cmd.envs(envs);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    configure_host_exec_child(&mut cmd, worktree, envs);
     cmd.spawn().context("Failed to spawn command")
 }
 
@@ -192,12 +196,7 @@ fn spawn_macos(
     cmd.arg("-D").arg(format!("WORKTREE={}", worktree_str));
     cmd.arg(program);
     cmd.args(args);
-    cmd.current_dir(worktree);
-    cmd.env_clear();
-    cmd.envs(envs);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    configure_host_exec_child(&mut cmd, worktree, envs);
 
     debug!(program, "spawning under sandbox-exec");
     cmd.spawn().context("Failed to spawn sandbox-exec")
@@ -421,13 +420,7 @@ fn spawn_bwrap(
     cmd.arg("--");
     cmd.arg(program);
     cmd.args(args);
-
-    cmd.current_dir(worktree);
-    cmd.env_clear();
-    cmd.envs(envs);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    configure_host_exec_child(&mut cmd, worktree, envs);
 
     debug!(program, "spawning under bwrap");
     cmd.spawn().context("Failed to spawn bwrap")
