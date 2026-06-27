@@ -7,11 +7,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Run all checks via three parallel pipelines
-[parallel]
-check: _rust-pipeline _python-pipeline docs-check
+# Run project checks through checkle
+check:
+    checkle run all
 
-# Run check and fail if there are uncommitted changes (for CI)
+# Run check and fail if there are uncommitted changes for CI
 check-ci: check
     #!/usr/bin/env bash
     set -euo pipefail
@@ -22,30 +22,24 @@ check-ci: check
         exit 1
     fi
 
-# Rust: format → clippy → test (sequential)
-_rust-pipeline: format-rust clippy unit-tests
-
-# Python: format → lint → typecheck (sequential)
-_python-pipeline: format-python ruff-check pyright
-
-# Format Rust and Python files
+# Check Rust and Python formatting through checkle
 format: format-rust format-python
 
-# Format Rust files
+# Check Rust formatting through checkle
 format-rust:
-    @cargo fmt --all
+    checkle run format-rust-check
 
-# Format Python test files
+# Check Python formatting through checkle
 format-python:
-    @ruff format tests --quiet
+    checkle run format-python-check
 
-# Auto-fix clippy warnings, then fail on any remaining
+# Check clippy through checkle
 clippy:
-    @cargo clippy --fix --allow-dirty --quiet -- -D clippy::all 2>&1 | { grep -v "^0 errors" || true; }
+    checkle run clippy
 
-# Build the project
+# Check the build through checkle
 build:
-    cargo build --all
+    checkle --label build --mode cargo -- cargo build --all --message-format=json
 
 # Install release binary globally from local source
 install:
@@ -62,56 +56,38 @@ install-release:
 install-dev:
     cargo build && ln -sf $(pwd)/target/debug/workmux ~/.cargo/bin/workmux
 
-# Run unit tests
+# Run unit tests through checkle
 unit-tests:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    output=$(cargo test --bin workmux --quiet 2>&1) || { echo "$output"; exit 1; }
-    echo "$output" | tail -1
+    checkle run unit-tests
 
-# Run ruff linter on Python tests
+# Check Python tests with ruff through checkle
 ruff-check:
-    @ruff check tests --fix --quiet
+    checkle run ruff-check
 
-# Run pyright type checker on Python tests
+# Check Python tests with pyright through checkle
 pyright:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source tests/venv/bin/activate
-    output=$(pyright tests 2>&1) || { echo "$output"; exit 1; }
-    echo "$output" | grep -v "^0 errors" || true
+    checkle run pyright
 
-# Check that all docs pages have meta descriptions
+# Check docs pages through checkle
 docs-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    missing=()
-    while IFS= read -r file; do
-        if ! head -20 "$file" | grep -q '^description:'; then
-            missing+=("$file")
-        fi
-    done < <(find docs -name "*.md" -not -path "*/node_modules/*" -not -path "docs/README.md")
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "Missing meta description in:"
-        printf '  %s\n' "${missing[@]}"
-        exit 1
-    fi
+    checkle run docs-check
 
 # Run the application
 run *ARGS:
     cargo run -- "$@"
 
-# Run Python tests in parallel (depends on build)
-test *ARGS: build
+# Run Python tests in parallel
+test *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    source tests/venv/bin/activate
-    export WORKMUX_TEST=1
-    quiet_flag=""
-    [[ -n "${CLAUDECODE:-}" ]] && quiet_flag="-q"
     if [ $# -eq 0 ]; then
-        pytest tests/ -n auto $quiet_flag
+        checkle run unit-tests
     else
+        cargo build --all
+        source tests/venv/bin/activate
+        export WORKMUX_TEST=1
+        quiet_flag=""
+        [[ -n "${CLAUDECODE:-}" ]] && quiet_flag="-q"
         pytest $quiet_flag "$@"
     fi
 
