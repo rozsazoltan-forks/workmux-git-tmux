@@ -45,6 +45,7 @@ use self::panes::{
 const SIDEBAR_ROLE_VALUE: &str = "sidebar";
 const MIN_WIDTH: u16 = 25;
 const MAX_WIDTH: u16 = 50;
+const MAX_SANE_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 1;
 const MAX_HEIGHT: u16 = 5;
 
@@ -241,24 +242,38 @@ fn set_sidebar_position(position: SidebarPosition) {
         .run();
 }
 
+fn default_width_for(tw: u16) -> u16 {
+    if tw == 0 {
+        return MIN_WIDTH;
+    }
+    (tw * 10 / 100).clamp(MIN_WIDTH, MAX_WIDTH)
+}
+
+pub(super) fn width_exceeds_defensive_max(width: u16) -> bool {
+    width > MAX_SANE_WIDTH
+}
+
 /// Resolve sidebar width for a given terminal/window width.
 ///
 /// Priority: explicit config > synced (persisted resize) > default (10%).
 fn resolve_width_for(config: &crate::config::Config, tw: u16, synced_width: Option<u16>) -> u16 {
     if let Some(ref w) = config.sidebar.width {
-        return w.resolve(tw).max(10);
+        let width = w.resolve(tw).max(10);
+        return if width_exceeds_defensive_max(width) {
+            default_width_for(tw)
+        } else {
+            width
+        };
     }
 
-    if let Some(w) = synced_width {
+    if let Some(w) = synced_width
+        && !width_exceeds_defensive_max(w)
+    {
         let max_w = tw.saturating_sub(10).max(10);
         return w.clamp(10, max_w);
     }
 
-    // Default: 10% of terminal, clamped to [MIN_WIDTH, MAX_WIDTH]
-    if tw == 0 {
-        return MIN_WIDTH;
-    }
-    (tw * 10 / 100).clamp(MIN_WIDTH, MAX_WIDTH)
+    default_width_for(tw)
 }
 
 fn resolve_height_for(config: &crate::config::Config, th: u16, synced_height: Option<u16>) -> u16 {
@@ -907,8 +922,8 @@ mod tests {
     #[test]
     fn resolve_width_clamps_synced_to_window() {
         let config = crate::config::Config::default();
-        // Synced width of 100 in a 60-col window should clamp to 50 (60 - 10)
-        assert_eq!(resolve_width_for(&config, 60, Some(100)), 50);
+        // Synced width of 80 in a 60-col window should clamp to 50 (60 - 10)
+        assert_eq!(resolve_width_for(&config, 60, Some(80)), 50);
         // Synced width of 5 should clamp to minimum 10
         assert_eq!(resolve_width_for(&config, 200, Some(5)), 10);
     }
@@ -930,6 +945,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_width_uses_default_for_excessive_synced_width() {
+        let config = crate::config::Config::default();
+        assert_eq!(resolve_width_for(&config, 200, Some(150)), 25);
+    }
+
+    #[test]
+    fn resolve_width_uses_default_for_excessive_explicit_width() {
+        let mut config = crate::config::Config::default();
+        config.sidebar.width = Some(crate::config::SidebarWidth::Absolute(150));
+        assert_eq!(resolve_width_for(&config, 200, Some(40)), 25);
+    }
+
+    #[test]
+    fn resolve_width_keeps_explicit_width_at_defensive_max() {
+        let mut config = crate::config::Config::default();
+        config.sidebar.width = Some(crate::config::SidebarWidth::Absolute(80));
+        assert_eq!(resolve_width_for(&config, 200, None), 80);
+    }
+
+    #[test]
     fn resolve_height_uses_explicit_config_before_synced_height() {
         let mut config = crate::config::Config::default();
         config.sidebar.height = Some(crate::config::SidebarHeight::Absolute(2));
@@ -947,7 +982,7 @@ mod tests {
     #[test]
     fn resolve_width_keeps_explicit_width_upper_bound() {
         let mut config = crate::config::Config::default();
-        config.sidebar.width = Some(crate::config::SidebarWidth::Absolute(95));
-        assert_eq!(resolve_width_for(&config, 100, None), 95);
+        config.sidebar.width = Some(crate::config::SidebarWidth::Absolute(80));
+        assert_eq!(resolve_width_for(&config, 100, None), 80);
     }
 }

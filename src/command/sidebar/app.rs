@@ -787,7 +787,13 @@ impl SidebarApp {
                 let expected = super::effective_width_for(&config, window_w);
                 let delta = (actual_width as i16 - expected as i16).abs();
                 if delta > 0 {
-                    if config.sidebar.width.is_none() {
+                    if super::width_exceeds_defensive_max(actual_width) {
+                        if let Some(wid) = self.host_window_id().map(str::to_string) {
+                            super::set_sidebar_width(expected);
+                            self.suppress_resize_once = true;
+                            let _ = super::reflow(Some(&wid));
+                        }
+                    } else if config.sidebar.width.is_none() {
                         super::set_sidebar_width(actual_width);
                         if let Some(wid) = self.host_window_id() {
                             super::reflow_all_sidebars_except(wid);

@@ -94,12 +94,13 @@ sidebar:
 ```
 
 Width defaults to 10% of terminal width, clamped between 25 and 50 columns.
-When set explicitly, the clamp is removed (minimum 10 columns). Height only
-applies to `position: top`; set it as a row count for the number of horizontal
-lines you want to show. Horizontal item width defaults to 24 columns and is
-clamped between 12 and 80. Position changes take effect the next time you toggle
-the sidebar off and on. Use `workmux sidebar --position top` or `--position left`
-to override the configured placement for that toggle.
+When set explicitly, the clamp is removed (minimum 10 columns). Widths above
+80 columns use the default width so tmux pane expansion recovers automatically.
+Height only applies to `position: top`; set it as a row count for the number of
+horizontal lines you want to show. Horizontal item width defaults to 24 columns
+and is clamped between 12 and 80. Position changes take effect the next time you
+toggle the sidebar off and on. Use `workmux sidebar --position top` or
+`--position left` to override the configured placement for that toggle.
 
 ## Layout modes
 
