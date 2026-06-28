@@ -786,9 +786,18 @@ impl Multiplexer for TmuxBackend {
         // We use only the socket path, which identifies the tmux server.
         // All sessions on the same server share one socket, so instance_id
         // is per-server, not per-session.
-        std::env::var("TMUX")
+        if let Some(socket_path) = std::env::var("TMUX")
             .ok()
             .and_then(|tmux| tmux.split(',').next().map(String::from))
+            .filter(|socket_path| !socket_path.is_empty())
+        {
+            return socket_path;
+        }
+
+        self.tmux_query(&["display-message", "-p", "#{socket_path}"])
+            .ok()
+            .map(|socket_path| socket_path.trim().to_string())
+            .filter(|socket_path| !socket_path.is_empty())
             .unwrap_or_else(|| "default".to_string())
     }
 

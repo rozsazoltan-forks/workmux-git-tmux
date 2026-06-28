@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::ValueEnum;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::config::Config;
-use crate::multiplexer::{AgentStatus, create_backend, detect_backend};
+use crate::multiplexer::{AgentStatus, LivePaneInfo, Multiplexer, create_backend, detect_backend};
 
 #[derive(ValueEnum, Debug, Clone)]
 pub enum SetWindowStatusCommand {
@@ -35,8 +37,10 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
     let config = Config::load(None)?;
     let mux = create_backend(detect_backend());
 
-    // Fail silently if not in a multiplexer session
-    let Some(pane_id) = mux.current_pane_id() else {
+    // Fail silently if not in a multiplexer session. Some agents, including
+    // Codex, strip TMUX/TMUX_PANE from hook command environments; in that case
+    // fall back to matching the hook cwd to a live pane cwd.
+    let Some(pane_id) = resolve_status_pane_id(&*mux) else {
         return Ok(());
     };
 
@@ -98,6 +102,58 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
     Ok(())
 }
 
+fn resolve_status_pane_id(mux: &dyn Multiplexer) -> Option<String> {
+    mux.current_pane_id()
+        .or_else(|| resolve_status_pane_id_from_cwd(mux).ok().flatten())
+}
+
+fn resolve_status_pane_id_from_cwd(mux: &dyn Multiplexer) -> Result<Option<String>> {
+    let cwd = std::env::current_dir()?;
+    let live_panes = mux.get_all_live_pane_info()?;
+    Ok(select_pane_for_cwd(&live_panes, &cwd))
+}
+
+fn select_pane_for_cwd(live_panes: &HashMap<String, LivePaneInfo>, cwd: &Path) -> Option<String> {
+    let cwd = normalized_path(cwd);
+    let mut best: Option<(&str, usize)> = None;
+    let mut tied = false;
+
+    for (pane_id, pane) in live_panes {
+        let pane_cwd = normalized_path(&pane.working_dir);
+        if !cwd.starts_with(&pane_cwd) {
+            continue;
+        }
+
+        // Prefer the closest ancestor. Exact matches naturally win because
+        // they have the most path components.
+        let score = pane_cwd.components().count();
+        match best {
+            None => {
+                best = Some((pane_id.as_str(), score));
+                tied = false;
+            }
+            Some((_, best_score)) if score > best_score => {
+                best = Some((pane_id.as_str(), score));
+                tied = false;
+            }
+            Some((_, best_score)) if score == best_score => {
+                tied = true;
+            }
+            Some(_) => {}
+        }
+    }
+
+    if tied {
+        None
+    } else {
+        best.map(|(pane_id, _)| pane_id.to_string())
+    }
+}
+
+fn normalized_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Send a status update via RPC when running inside a sandbox guest.
 fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
     use crate::sandbox::rpc::{RpcClient, RpcRequest, RpcResponse};
@@ -121,5 +177,56 @@ fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
             Ok(()) // Fail silently like the host path does
         }
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn live_pane(path: &str) -> LivePaneInfo {
+        LivePaneInfo {
+            pid: Some(1),
+            current_command: Some("codex".to_string()),
+            working_dir: PathBuf::from(path),
+            title: None,
+            session: Some("test".to_string()),
+            window: Some("wm-test".to_string()),
+            session_id: Some("$1".to_string()),
+            window_id: Some("@1".to_string()),
+        }
+    }
+
+    #[test]
+    fn select_pane_for_cwd_prefers_exact_match() {
+        let mut panes = HashMap::new();
+        panes.insert("%1".to_string(), live_pane("/repo"));
+        panes.insert("%2".to_string(), live_pane("/repo/subdir"));
+
+        assert_eq!(
+            select_pane_for_cwd(&panes, Path::new("/repo/subdir")),
+            Some("%2".to_string())
+        );
+    }
+
+    #[test]
+    fn select_pane_for_cwd_accepts_closest_ancestor() {
+        let mut panes = HashMap::new();
+        panes.insert("%1".to_string(), live_pane("/repo"));
+        panes.insert("%2".to_string(), live_pane("/other"));
+
+        assert_eq!(
+            select_pane_for_cwd(&panes, Path::new("/repo/nested/package")),
+            Some("%1".to_string())
+        );
+    }
+
+    #[test]
+    fn select_pane_for_cwd_rejects_ambiguous_matches() {
+        let mut panes = HashMap::new();
+        panes.insert("%1".to_string(), live_pane("/repo"));
+        panes.insert("%2".to_string(), live_pane("/repo"));
+
+        assert_eq!(select_pane_for_cwd(&panes, Path::new("/repo")), None);
     }
 }

@@ -13,11 +13,19 @@ verify the state files have the fields needed for reconciliation to work.
 """
 
 import json
+import os
+import shlex
+import shutil
 from pathlib import Path
+
+import pytest
 
 from .conftest import (
     MuxEnvironment,
+    TmuxEnvironment,
     get_window_name,
+    get_worktree_path,
+    make_env_script,
     poll_until,
     run_workmux_add,
     wait_for_window_ready,
@@ -104,6 +112,66 @@ def test_set_window_status_disabled_by_env(
 
     assert poll_until(lambda: marker_path.exists(), timeout=5.0)
     assert list_agent_state_files(env) == []
+
+
+@pytest.mark.tmux_only
+def test_set_window_status_without_tmux_env_uses_cwd(
+    mux_server: TmuxEnvironment, workmux_exe_path: Path, mux_repo_path: Path
+):
+    """Codex hooks strip TMUX/TMUX_PANE, so status must resolve the pane by cwd."""
+    env = mux_server
+    branch_name = "feature-status-no-tmux-env"
+    window_name = get_window_name(branch_name)
+
+    write_workmux_config(
+        mux_repo_path,
+        panes=[
+            {"focus": True},
+        ],
+    )
+
+    run_workmux_add(env, workmux_exe_path, mux_repo_path, branch_name)
+    wait_for_window_ready(env, window_name)
+
+    real_tmux = shutil.which("tmux", path=os.environ.get("PATH", ""))
+    assert real_tmux is not None, "tmux binary not found"
+    tmux_wrapper = env.fake_bin_dir / "tmux"
+    tmux_wrapper.write_text(
+        "#!/bin/sh\n"
+        f'exec {shlex.quote(real_tmux)} -S {shlex.quote(str(env.socket_path))} "$@"\n'
+    )
+    tmux_wrapper.chmod(0o755)
+
+    marker_path = env.tmp_path / "status-no-tmux-env-finished"
+    worktree_path = get_worktree_path(mux_repo_path, branch_name)
+    command = (
+        "unset TMUX TMUX_PANE; "
+        f"cd {shlex.quote(str(worktree_path))} && "
+        f"{shlex.quote(str(workmux_exe_path))} set-window-status working; "
+        f"touch {shlex.quote(str(marker_path))}"
+    )
+    status_cmd = make_env_script(
+        env,
+        command,
+        {
+            "HOME": str(env.home_path),
+            "PATH": env.env["PATH"],
+            "XDG_STATE_HOME": env.env["XDG_STATE_HOME"],
+            "WORKMUX_BACKEND": "tmux",
+        },
+    )
+    env.send_keys(window_name, status_cmd)
+
+    assert poll_until(lambda: marker_path.exists(), timeout=5.0)
+    assert poll_until(lambda: len(list_agent_state_files(env)) > 0, timeout=5.0), (
+        "State file not created without TMUX/TMUX_PANE"
+    )
+
+    state = read_agent_state(list_agent_state_files(env)[0])
+    assert state["pane_key"]["backend"] == "tmux"
+    assert state["pane_key"]["instance"] == str(env.socket_path)
+    assert state["workdir"] == str(worktree_path)
+    assert state["status"] == "working"
 
 
 def test_state_file_has_correct_fields(
