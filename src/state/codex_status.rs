@@ -1,14 +1,15 @@
 //! Codex-specific workaround for nested hook status updates.
 //!
-//! Codex currently runs Workmux status hooks for both a parent agent and its
-//! spawned subagents in the same tmux pane. A subagent `Stop` hook can therefore
-//! run before the parent `Stop` hook and incorrectly mark the pane/window as
-//! done while the parent is still active.
+//! Codex can run Workmux status hooks for both a parent agent and its spawned
+//! subagents in the same tmux pane. A subagent stop event can therefore run
+//! before the parent stop event and incorrectly mark the pane/window as done
+//! while the parent is still active.
 //!
-//! Codex hook payloads do not currently expose an explicit root/subagent marker
-//! such as `agent_path`, `parent_thread_id`, or `is_subagent`. Until they do,
-//! Workmux tracks active Codex turns by `session_id` + `turn_id` and renders the
-//! pane as working while any tracked Codex turn is active.
+//! Current Codex hook payloads expose `agent_id` / `agent_type` for thread-spawned
+//! subagent turns, but not parent/child relationships between simultaneously
+//! active turns in the same tmux pane. Workmux tracks active Codex turns by
+//! `session_id` + `turn_id` and renders the pane as working while any tracked
+//! Codex turn is active.
 //!
 //! Keep this module isolated so it can be removed or replaced if Codex adds
 //! official hook metadata for subagent/root detection.
@@ -32,8 +33,7 @@ struct CodexHookProbe {
     turn_id: Option<String>,
     transcript_path: Option<String>,
     model: Option<String>,
-    agent_id: Option<String>,
-    agent_type: Option<String>,
+    agent_transcript_path: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -105,14 +105,16 @@ pub(crate) fn clear_pane_with_store(store: &StateStore, pane_key: &PaneKey) -> R
 fn detect_run_id(input: &str) -> Option<String> {
     let payload: CodexHookProbe = serde_json::from_str(input).ok()?;
 
-    if payload.agent_id.is_some() || payload.agent_type.is_some() {
-        return None;
-    }
-
     let event = payload.hook_event_name.as_deref()?;
     if !matches!(
         event,
-        "UserPromptSubmit" | "PreToolUse" | "PermissionRequest" | "PostToolUse" | "Stop"
+        "UserPromptSubmit"
+            | "PreToolUse"
+            | "PermissionRequest"
+            | "PostToolUse"
+            | "SubagentStart"
+            | "SubagentStop"
+            | "Stop"
     ) {
         return None;
     }
@@ -128,12 +130,8 @@ fn detect_run_id(input: &str) -> Option<String> {
 }
 
 fn has_codex_signal(payload: &CodexHookProbe) -> bool {
-    let rollout_transcript = payload
-        .transcript_path
-        .as_deref()
-        .and_then(|path| Path::new(path).file_name())
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"));
+    let rollout_transcript = is_rollout_transcript(payload.transcript_path.as_deref())
+        || is_rollout_transcript(payload.agent_transcript_path.as_deref());
 
     let gpt_model = payload
         .model
@@ -141,6 +139,12 @@ fn has_codex_signal(payload: &CodexHookProbe) -> bool {
         .is_some_and(|model| model.starts_with("gpt-"));
 
     rollout_transcript || gpt_model
+}
+
+fn is_rollout_transcript(path: Option<&str>) -> bool {
+    path.and_then(|path| Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -277,6 +281,41 @@ mod tests {
     }
 
     #[test]
+    fn detects_codex_subagent_payload_with_agent_fields() {
+        let input = r#"{
+            "hook_event_name":"UserPromptSubmit",
+            "session_id":"child-session",
+            "turn_id":"child-turn",
+            "model":"gpt-5.5",
+            "agent_id":"child-session",
+            "agent_type":"worker"
+        }"#;
+
+        assert_eq!(
+            detect_run_id(input).as_deref(),
+            Some("child-session:child-turn")
+        );
+    }
+
+    #[test]
+    fn detects_codex_subagent_stop_payload() {
+        let input = r#"{
+            "hook_event_name":"SubagentStop",
+            "session_id":"child-session",
+            "turn_id":"child-turn",
+            "transcript_path":"/custom/codex/rollout-parent.jsonl",
+            "agent_transcript_path":"/custom/codex/rollout-child.jsonl",
+            "agent_id":"child-session",
+            "agent_type":"worker"
+        }"#;
+
+        assert_eq!(
+            detect_run_id(input).as_deref(),
+            Some("child-session:child-turn")
+        );
+    }
+
+    #[test]
     fn rejects_payload_without_codex_signal() {
         let input = r#"{
             "hook_event_name":"Stop",
@@ -334,12 +373,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_claude_like_agent_payload() {
+    fn rejects_agent_payload_without_codex_signal() {
         let input = r#"{
             "hook_event_name":"Stop",
             "session_id":"session",
             "turn_id":"turn",
-            "model":"gpt-5.5",
             "agent_id":"agent"
         }"#;
 
@@ -350,6 +388,26 @@ mod tests {
     fn aggregate_keeps_parent_working_after_child_done() {
         let mut pane = CodexPaneStatus::default();
         start_parent_and_child(&mut pane);
+        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
+        assert_apply(&mut pane, "parent", AgentStatus::Done, AgentStatus::Done);
+        assert!(pane.is_empty());
+    }
+
+    #[test]
+    fn aggregate_current_codex_subagent_lifecycle() {
+        let mut pane = CodexPaneStatus::default();
+        assert_apply(
+            &mut pane,
+            "parent",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply(
+            &mut pane,
+            "child",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
         assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
         assert_apply(&mut pane, "parent", AgentStatus::Done, AgentStatus::Done);
         assert!(pane.is_empty());

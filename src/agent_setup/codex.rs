@@ -205,6 +205,8 @@ mod tests {
         let hooks = parsed.get("hooks").unwrap().as_object().unwrap();
         assert!(hooks.contains_key("UserPromptSubmit"));
         assert!(hooks.contains_key("PostToolUse"));
+        assert!(hooks.contains_key("SubagentStart"));
+        assert!(hooks.contains_key("SubagentStop"));
         assert!(hooks.contains_key("Stop"));
     }
 
@@ -219,6 +221,8 @@ mod tests {
         let obj = hooks.as_object().unwrap();
         assert!(obj.contains_key("UserPromptSubmit"));
         assert!(obj.contains_key("PostToolUse"));
+        assert!(obj.contains_key("SubagentStart"));
+        assert!(obj.contains_key("SubagentStop"));
         assert!(obj.contains_key("Stop"));
     }
 
