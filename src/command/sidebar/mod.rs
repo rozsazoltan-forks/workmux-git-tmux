@@ -243,18 +243,15 @@ fn set_sidebar_position(position: SidebarPosition) {
 
 /// Resolve sidebar width for a given terminal/window width.
 ///
-/// If `synced_width` is provided, it takes precedence over config/default.
-/// The result is clamped to ensure the sidebar is at least 10 columns
-/// and leaves at least 20 columns for content panes.
+/// Priority: explicit config > synced (persisted resize) > default (10%).
 fn resolve_width_for(config: &crate::config::Config, tw: u16, synced_width: Option<u16>) -> u16 {
+    if let Some(ref w) = config.sidebar.width {
+        return w.resolve(tw).max(10);
+    }
+
     if let Some(w) = synced_width {
         let max_w = tw.saturating_sub(10).max(10);
         return w.clamp(10, max_w);
-    }
-
-    if let Some(ref w) = config.sidebar.width {
-        // Explicit config: respect it, only enforce a minimum of 10
-        return w.resolve(tw).max(10);
     }
 
     // Default: 10% of terminal, clamped to [MIN_WIDTH, MAX_WIDTH]
@@ -414,11 +411,14 @@ pub(super) fn reflow_all_sidebars_except(exclude_window_id: &str) {
 /// Reflow sidebar layouts in all windows. Called by the window-resized hook
 /// so inactive windows get their sidebar widths corrected without waiting for
 /// the user to visit them.
-pub fn reflow_all() -> Result<()> {
-    reflow_all_to_window_extent(None)
+pub fn reflow_all(exclude_window: Option<&str>) -> Result<()> {
+    reflow_all_to_window_extent(None, exclude_window)
 }
 
-pub(super) fn reflow_all_to_window_extent(window_extent: Option<u16>) -> Result<()> {
+pub(super) fn reflow_all_to_window_extent(
+    window_extent: Option<u16>,
+    exclude_window: Option<&str>,
+) -> Result<()> {
     let scope = current_scope();
     if matches!(scope, SidebarScope::Off) {
         return Ok(());
@@ -430,6 +430,10 @@ pub(super) fn reflow_all_to_window_extent(window_extent: Option<u16>) -> Result<
     let synced_height = read_sidebar_height();
 
     for (window_id, pane_id) in panes::list_sidebar_panes() {
+        if exclude_window.is_some_and(|ex| ex == window_id) {
+            continue;
+        }
+
         // Scope filter
         if !apply_scope_filter(&scope, &window_id) {
             continue;
@@ -930,5 +934,20 @@ mod tests {
         let mut config = crate::config::Config::default();
         config.sidebar.height = Some(crate::config::SidebarHeight::Absolute(2));
         assert_eq!(resolve_height_for(&config, 40, Some(1)), 2);
+    }
+
+    #[test]
+    fn resolve_width_uses_explicit_config_before_synced_width() {
+        let mut config = crate::config::Config::default();
+        config.sidebar.width = Some(crate::config::SidebarWidth::Percent(10));
+        // Synced width of 150 should be ignored; 10% of 200 = 20
+        assert_eq!(resolve_width_for(&config, 200, Some(150)), 20);
+    }
+
+    #[test]
+    fn resolve_width_keeps_explicit_width_upper_bound() {
+        let mut config = crate::config::Config::default();
+        config.sidebar.width = Some(crate::config::SidebarWidth::Absolute(95));
+        assert_eq!(resolve_width_for(&config, 100, None), 95);
     }
 }

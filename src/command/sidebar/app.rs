@@ -154,6 +154,8 @@ pub struct SidebarApp {
     pub has_loaded_snapshot: bool,
     pub list_state: ListState,
     pub should_quit: bool,
+    /// When true, quit without triggering global sidebar shutdown (last-pane auto-exit).
+    pub quit_silent: bool,
     pub quit_reason: Option<String>,
     pub palette: ThemePalette,
     pub status_icons: StatusIcons,
@@ -220,6 +222,7 @@ pub struct SidebarApp {
     pending_resize_rows: Option<u16>,
     /// Deadline after which pending resize should be processed.
     pub(super) resize_deadline: Option<Instant>,
+    suppress_resize_once: bool,
 }
 
 impl SidebarApp {
@@ -231,6 +234,7 @@ impl SidebarApp {
             has_loaded_snapshot: true,
             list_state: ListState::default(),
             should_quit: false,
+            quit_silent: false,
             quit_reason: None,
             palette: ThemePalette::from_config(
                 &Config::default().theme,
@@ -273,6 +277,7 @@ impl SidebarApp {
             pending_resize_cols: None,
             pending_resize_rows: None,
             resize_deadline: None,
+            suppress_resize_once: false,
         }
     }
 
@@ -312,6 +317,7 @@ impl SidebarApp {
             has_loaded_snapshot: false,
             list_state: ListState::default(),
             should_quit: false,
+            quit_silent: false,
             quit_reason: None,
             palette,
             status_icons,
@@ -347,6 +353,7 @@ impl SidebarApp {
             pending_resize_cols: None,
             pending_resize_rows: None,
             resize_deadline: None,
+            suppress_resize_once: false,
         })
     }
 
@@ -702,6 +709,14 @@ impl SidebarApp {
 
     /// Record a resize event for debounced manual pane resize processing.
     pub fn on_resize_event(&mut self, cols: u16, rows: u16) {
+        if self.suppress_resize_once {
+            self.suppress_resize_once = false;
+            self.pending_resize_cols = None;
+            self.pending_resize_rows = None;
+            self.resize_deadline = None;
+            return;
+        }
+
         match self.position {
             SidebarPosition::Left => {
                 let window_w = self.query_host_window_width();
@@ -710,7 +725,7 @@ impl SidebarApp {
                     self.pending_resize_cols = None;
                     self.pending_resize_rows = None;
                     self.resize_deadline = None;
-                    let _ = super::reflow_all_to_window_extent(Some(window_w));
+                    let _ = super::reflow_all_to_window_extent(Some(window_w), None);
                     return;
                 }
                 self.pending_resize_cols = Some(cols);
@@ -722,7 +737,7 @@ impl SidebarApp {
                     self.pending_resize_cols = None;
                     self.pending_resize_rows = None;
                     self.resize_deadline = None;
-                    let _ = super::reflow_all_to_window_extent(Some(window_h));
+                    let _ = super::reflow_all_to_window_extent(Some(window_h), None);
                     return;
                 }
                 self.pending_resize_rows = Some(rows);
@@ -772,9 +787,14 @@ impl SidebarApp {
                 let expected = super::effective_width_for(&config, window_w);
                 let delta = (actual_width as i16 - expected as i16).abs();
                 if delta > 0 {
-                    super::set_sidebar_width(actual_width);
-                    if let Some(wid) = self.host_window_id() {
-                        super::reflow_all_sidebars_except(wid);
+                    if config.sidebar.width.is_none() {
+                        super::set_sidebar_width(actual_width);
+                        if let Some(wid) = self.host_window_id() {
+                            super::reflow_all_sidebars_except(wid);
+                        }
+                    } else if let Some(wid) = self.host_window_id().map(str::to_string) {
+                        self.suppress_resize_once = true;
+                        let _ = super::reflow(Some(&wid));
                     }
                 }
             }
@@ -797,9 +817,14 @@ impl SidebarApp {
                 let expected = super::effective_height_for(&config, window_h);
                 let delta = (actual_height as i16 - expected as i16).abs();
                 if delta > 0 {
-                    super::set_sidebar_height(actual_height);
-                    if let Some(wid) = self.host_window_id() {
-                        super::reflow_all_sidebars_except(wid);
+                    if config.sidebar.height.is_none() {
+                        super::set_sidebar_height(actual_height);
+                        if let Some(wid) = self.host_window_id() {
+                            super::reflow_all_sidebars_except(wid);
+                        }
+                    } else if let Some(wid) = self.host_window_id().map(str::to_string) {
+                        self.suppress_resize_once = true;
+                        let _ = super::reflow(Some(&wid));
                     }
                 }
             }
