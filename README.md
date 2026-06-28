@@ -1750,6 +1750,9 @@ The sidebar displays:
 | `v`     | Toggle layout mode |
 | `q`     | Quit sidebar       |
 
+With tmux mouse mode enabled (`set -g mouse on`), click an agent row or top-bar
+chip to jump to its pane, or scroll to navigate the list.
+
 When the global sidebar is active, `workmux sidebar --session` hides it in the
 current tmux session only. Run the same command again to show it in that session
 again while keeping the global sidebar active elsewhere.

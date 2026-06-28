@@ -34,6 +34,11 @@ Each agent row displays:
 | `z`     | Toggle sleeping on agent |
 | `q`     | Quit sidebar             |
 
+## Mouse support
+
+With tmux mouse mode enabled (`set -g mouse on`), click an agent row or top-bar
+chip to jump to its pane, or scroll to navigate the list.
+
 ## Navigation commands
 
 Switch between agents from any tmux pane, in the same order shown in the
