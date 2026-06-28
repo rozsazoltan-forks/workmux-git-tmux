@@ -22,6 +22,10 @@ check-ci: check
         exit 1
     fi
 
+# Install shims into the Git hooks directory
+install-hooks:
+    scripts/install-git-hook-shims
+
 # Check Rust and Python formatting through checkle
 format: format-rust format-python
 
