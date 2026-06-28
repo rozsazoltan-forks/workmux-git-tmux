@@ -2,7 +2,7 @@ panes:
   - command: <agent> # Start the configured agent (e.g., claude)
     focus: true
   - split: horizontal
-    command: '(cd docs && npm install)'
+    command: "(cd docs && npm install)"
 
 # Commands run after worktree creation (blocks window creation, keep fast)
 files:
@@ -11,7 +11,6 @@ files:
     - tests/venv # Share Python venv for faster worktree creation
     - .ignore
     - history
-    - hooks/pre-commit
 
 pre_merge:
   - just check-ci
