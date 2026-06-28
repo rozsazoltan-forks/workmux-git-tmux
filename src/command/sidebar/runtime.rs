@@ -101,6 +101,8 @@ pub fn run_sidebar() -> Result<()> {
     let mut needs_render = true;
     let startup = std::time::Instant::now();
     let startup_grace = Duration::from_secs(3);
+    let tick_rate = Duration::from_millis(250);
+    let mut last_spinner_tick = std::time::Instant::now();
 
     loop {
         // Render before blocking (redraws only when state changed)
@@ -109,13 +111,13 @@ pub fn run_sidebar() -> Result<()> {
             needs_render = false;
         }
 
-        // Adaptive timeout: 250ms when active (for spinner), block when hidden.
+        // Adaptive timeout: 250ms when active, block when hidden.
         // If a resize debounce is pending, wake early to process it.
         let timeout = if let Some(deadline) = app.resize_deadline {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            remaining.min(Duration::from_millis(250))
+            remaining.min(tick_rate)
         } else if app.host_window_active() {
-            Duration::from_millis(250)
+            tick_rate.saturating_sub(last_spinner_tick.elapsed())
         } else {
             // Block until a snapshot or input wakes us. Use a large timeout
             // since recv() without timeout would prevent clean shutdown if
@@ -126,13 +128,13 @@ pub fn run_sidebar() -> Result<()> {
         let first_event = match rx.recv_timeout(timeout) {
             Ok(ev) => Some(ev),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Process any pending resize detection before ticking
                 app.process_pending_resize(&startup, startup_grace);
-                // Spinner tick (only fires when active, guaranteed by timeout choice)
-                if app.host_window_active() {
-                    app.tick();
-                    needs_render = true;
-                }
+                advance_spinner_if_due(
+                    &mut app,
+                    &mut last_spinner_tick,
+                    tick_rate,
+                    &mut needs_render,
+                );
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -167,6 +169,12 @@ pub fn run_sidebar() -> Result<()> {
 
         // Process any pending resize whose debounce has elapsed
         app.process_pending_resize(&startup, startup_grace);
+        advance_spinner_if_due(
+            &mut app,
+            &mut last_spinner_tick,
+            tick_rate,
+            &mut needs_render,
+        );
 
         if app.should_quit {
             tracing::info!(
@@ -181,6 +189,23 @@ pub fn run_sidebar() -> Result<()> {
 
     // _guard handles cleanup on drop (including the normal exit path)
     Ok(())
+}
+
+fn advance_spinner_if_due(
+    app: &mut SidebarApp,
+    last_spinner_tick: &mut std::time::Instant,
+    tick_rate: Duration,
+    needs_render: &mut bool,
+) {
+    if !app.host_window_active() {
+        *last_spinner_tick = std::time::Instant::now();
+        return;
+    }
+    if last_spinner_tick.elapsed() >= tick_rate {
+        *last_spinner_tick = std::time::Instant::now();
+        app.tick();
+        *needs_render = true;
+    }
 }
 
 fn process_event(
