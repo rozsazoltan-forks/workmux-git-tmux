@@ -18,6 +18,7 @@ pub fn run_isolated_test(test_name: &str, cwd: &Path, envs: &[(&str, &Path)]) {
         .arg("--nocapture")
         .current_dir(cwd)
         .env(ISOLATED_TEST_ENV, test_name);
+    clear_local_git_env(&mut command);
 
     for (key, value) in envs {
         command.env(key, value);
@@ -42,7 +43,9 @@ pub fn run_isolated_test(test_name: &str, cwd: &Path, envs: &[(&str, &Path)]) {
 }
 
 pub fn run_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    clear_local_git_env(&mut command);
+    let output = command
         .current_dir(repo)
         .args(args)
         .output()
@@ -56,7 +59,9 @@ pub fn run_git(repo: &Path, args: &[&str]) {
 }
 
 pub fn init_repo(dir: &Path) {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    clear_local_git_env(&mut command);
+    let output = command
         .args(["init", "-b", "main"])
         .current_dir(dir)
         .output()
@@ -71,4 +76,22 @@ pub fn init_repo(dir: &Path) {
     std::fs::write(dir.join("README.md"), "test\n").unwrap();
     run_git(dir, &["add", "README.md"]);
     run_git(dir, &["commit", "-m", "initial"]);
+}
+
+fn clear_local_git_env(command: &mut Command) {
+    for key in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ] {
+        command.env_remove(key);
+    }
 }
