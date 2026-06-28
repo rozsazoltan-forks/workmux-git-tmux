@@ -1766,6 +1766,10 @@ sidebar:
   layout: tiles # left only: "compact" or "tiles" (default)
 ```
 
+The left sidebar defaults to 10% of terminal width, clamped between 25 and 50
+columns. Widths above 80 columns use the default width so tmux pane expansion
+recovers automatically.
+
 Use `workmux sidebar --position top` or `--position left` to override the
 configured placement when enabling the sidebar.
 
