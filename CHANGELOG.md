@@ -22,6 +22,11 @@ description: Release notes and version history for workmux
 
 # Changelog
 
+## v0.1.216 (2026-06-28)
+
+- Fix Codex status tracking when hooks run without tmux environment details, so Codex agents appear in `workmux list` and the sidebar. ([#187](https://github.com/raine/workmux/issues/187))
+- Keep Codex sidebar status accurate for subagents, so panes stay working while parent work continues and clear when the root turn finishes. ([#170](https://github.com/raine/workmux/issues/170))
+
 ## v0.1.215 (2026-06-26)
 
 - Place new tmux windows from `workmux add` immediately beside the calling window, keeping new worktrees easy to find.
