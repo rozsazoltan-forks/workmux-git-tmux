@@ -1826,6 +1826,14 @@ def run_workmux_remove(
             assert poll_until(lambda: not worktree_path.exists(), timeout=15.0), (
                 "workmux remove did not remove the worktree"
             )
+            if not keep_branch:
+                assert poll_until(
+                    lambda: branch_for_path
+                    not in env.run_command(
+                        ["git", "branch", "--list", branch_for_path], cwd=repo_path
+                    ).stdout,
+                    timeout=15.0,
+                ), "workmux remove did not delete the branch"
             return
 
     # Wait for command to complete (longer timeout for --gone which runs git fetch)

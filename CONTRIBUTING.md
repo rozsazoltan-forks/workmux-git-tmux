@@ -42,14 +42,17 @@ Tests are written in Python using pytest and run against an isolated multiplexer
 environment.
 
 ```bash
-# Run all tests (tmux backend, parallel)
+# Run unit tests
 just test
 
-# Run specific test file
-just test tests/test_workmux_add/test_basic.py
+# Run integration tests (tmux backend, parallel)
+just itest
+
+# Run specific integration test file
+just itest tests/test_workmux_add/test_basic.py
 
 # Run with verbose output (shows backend in test names)
-just test tests/test_agent_state.py -vvv
+just itest tests/test_agent_state.py -vvv
 ```
 
 ### Testing different backends
@@ -58,13 +61,13 @@ By default, tests run against **tmux only**.
 
 ```bash
 # Test with WezTerm (requires WezTerm to be running)
-WORKMUX_TEST_BACKEND=wezterm just test
+WORKMUX_TEST_BACKEND=wezterm just itest
 
 # Test both backends
-just test --backend=tmux,wezterm
+just itest --backend=tmux,wezterm
 
-# Alternative: use pytest directly
-just test --backend=wezterm tests/test_agent_state.py -vvv
+# Run a specific backend and test file
+just itest --backend=wezterm tests/test_agent_state.py -vvv
 ```
 
 When running with `-vvv`, test names show the backend:
@@ -90,8 +93,11 @@ def test_tmux_specific_feature():
 ## Code quality
 
 ```bash
-# Run all checks (format, clippy, build, tests)
+# Run static checks, Rust lints, docs checks, and unit tests
 just check
+
+# Run integration tests
+just itest
 
 # Individual commands
 just format      # Format Rust and Python
@@ -108,14 +114,14 @@ just pyright     # Type check Python tests
 2. **Keep PRs focused**: One feature or fix per PR. Smaller PRs are easier to
    review.
 
-3. **Run checks locally**: Before pushing, run `just check` to catch issues
-   early.
+3. **Run checks locally**: Before pushing, run `just check` and `just itest` to
+   catch issues early.
 
 4. **Test multiple backends**: If your change affects multiplexer interaction,
    test with other backends:
 
    ```bash
-   just test --backend=tmux,wezterm
+   just itest --backend=tmux,wezterm
    ```
 
 5. **Update docs**: If adding features, update relevant documentation in `docs/`

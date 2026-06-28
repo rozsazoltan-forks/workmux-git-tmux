@@ -14,4 +14,4 @@ files:
 
 pre_merge:
   - just check-ci
-  - just test
+  - just itest

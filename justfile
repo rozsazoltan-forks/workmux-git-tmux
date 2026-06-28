@@ -80,19 +80,29 @@ docs-check:
 run *ARGS:
     cargo run -- "$@"
 
-# Run Python tests in parallel
+# Run integration tests in parallel
+itest *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --all
+    source tests/venv/bin/activate
+    export WORKMUX_TEST=1
+    quiet_flag=""
+    [[ -n "${CLAUDECODE:-}" ]] && quiet_flag="-q"
+    args=("$@")
+    if [ $# -eq 0 ]; then
+        args=(tests/ -n auto)
+    fi
+    pytest $quiet_flag "${args[@]}"
+
+# Run unit tests by default, pass args to integration tests
 test *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ $# -eq 0 ]; then
         checkle run unit-tests
     else
-        cargo build --all
-        source tests/venv/bin/activate
-        export WORKMUX_TEST=1
-        quiet_flag=""
-        [[ -n "${CLAUDECODE:-}" ]] && quiet_flag="-q"
-        pytest $quiet_flag "$@"
+        just itest "$@"
     fi
 
 # Run docs dev server
