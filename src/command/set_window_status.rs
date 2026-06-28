@@ -26,7 +26,7 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
 
     // Codex compatibility: hook stdin may identify a specific parent/subagent
     // turn. Use it to avoid a child Stop hook marking the pane done early.
-    let codex_run_id = crate::state::codex_status::detect_run_id_from_stdin();
+    let codex_context = crate::state::codex_status::detect_context_from_stdin();
 
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
@@ -67,9 +67,12 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
                 SetWindowStatusCommand::Clear => unreachable!(),
             };
 
-            let status = if let Some(run_id) = codex_run_id {
-                match crate::state::codex_status::apply_status(&pane_key, &run_id, requested_status)
-                {
+            let status = if let Some(context) = codex_context {
+                match crate::state::codex_status::apply_status(
+                    &pane_key,
+                    &context,
+                    requested_status,
+                ) {
                     Ok(status) => status,
                     Err(error) => {
                         warn!(%pane_id, ?requested_status, error = %error, "failed to update Codex status workaround state");

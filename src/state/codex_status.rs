@@ -34,6 +34,15 @@ struct CodexHookProbe {
     transcript_path: Option<String>,
     model: Option<String>,
     agent_transcript_path: Option<String>,
+    agent_id: Option<String>,
+    agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexHookContext {
+    run_id: String,
+    event: String,
+    is_subagent: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -45,7 +54,7 @@ struct CodexStatusLock {
     _lock: Flock<File>,
 }
 
-pub fn detect_run_id_from_stdin() -> Option<String> {
+pub fn detect_context_from_stdin() -> Option<CodexHookContext> {
     if io::stdin().is_terminal() {
         return None;
     }
@@ -58,29 +67,29 @@ pub fn detect_run_id_from_stdin() -> Option<String> {
         return None;
     }
 
-    detect_run_id(&input)
+    detect_context(&input)
 }
 
 pub fn apply_status(
     pane_key: &PaneKey,
-    run_id: &str,
+    context: &CodexHookContext,
     requested: AgentStatus,
 ) -> Result<AgentStatus> {
     let store = StateStore::new()?;
-    apply_status_with_store(&store, pane_key, run_id, requested)
+    apply_status_with_store(&store, pane_key, context, requested)
 }
 
 pub(crate) fn apply_status_with_store(
     store: &StateStore,
     pane_key: &PaneKey,
-    run_id: &str,
+    context: &CodexHookContext,
     requested: AgentStatus,
 ) -> Result<AgentStatus> {
     let dir = store.codex_status_runtime_dir();
     let _lock = acquire_lock(&dir, pane_key)?;
 
     let mut status = read_status(&dir, pane_key)?.unwrap_or_default();
-    let render_status = status.apply(run_id, requested);
+    let render_status = status.apply(context, requested);
 
     if status.is_empty() {
         delete_status(&dir, pane_key)?;
@@ -102,12 +111,17 @@ pub(crate) fn clear_pane_with_store(store: &StateStore, pane_key: &PaneKey) -> R
     delete_status(&dir, pane_key)
 }
 
+#[cfg(test)]
 fn detect_run_id(input: &str) -> Option<String> {
+    detect_context(input).map(|context| context.run_id)
+}
+
+fn detect_context(input: &str) -> Option<CodexHookContext> {
     let payload: CodexHookProbe = serde_json::from_str(input).ok()?;
 
-    let event = payload.hook_event_name.as_deref()?;
+    let event = payload.hook_event_name.as_deref()?.to_string();
     if !matches!(
-        event,
+        event.as_str(),
         "UserPromptSubmit"
             | "PreToolUse"
             | "PermissionRequest"
@@ -125,8 +139,15 @@ fn detect_run_id(input: &str) -> Option<String> {
 
     let session_id = non_empty(payload.session_id.as_deref())?;
     let turn_id = non_empty(payload.turn_id.as_deref())?;
+    let is_subagent = matches!(event.as_str(), "SubagentStart" | "SubagentStop")
+        || non_empty(payload.agent_id.as_deref()).is_some()
+        || non_empty(payload.agent_type.as_deref()).is_some();
 
-    Some(format!("{session_id}:{turn_id}"))
+    Some(CodexHookContext {
+        run_id: format!("{session_id}:{turn_id}"),
+        event,
+        is_subagent,
+    })
 }
 
 fn has_codex_signal(payload: &CodexHookProbe) -> bool {
@@ -155,14 +176,23 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 }
 
 impl CodexPaneStatus {
-    fn apply(&mut self, run_id: &str, requested: AgentStatus) -> AgentStatus {
+    fn apply(&mut self, context: &CodexHookContext, requested: AgentStatus) -> AgentStatus {
+        if context.is_root_user_prompt() && matches!(requested, AgentStatus::Working) {
+            self.active.clear();
+        }
+
         match requested {
             AgentStatus::Working | AgentStatus::Waiting => {
-                self.active.insert(run_id.to_string());
+                self.active.insert(context.run_id.clone());
                 AgentStatus::Working
             }
             AgentStatus::Done => {
-                self.active.remove(run_id);
+                if context.is_root_stop() {
+                    self.active.clear();
+                    return AgentStatus::Done;
+                }
+
+                self.active.remove(&context.run_id);
                 if self.active.is_empty() {
                     AgentStatus::Done
                 } else {
@@ -174,6 +204,25 @@ impl CodexPaneStatus {
 
     fn is_empty(&self) -> bool {
         self.active.is_empty()
+    }
+}
+
+impl CodexHookContext {
+    #[cfg(test)]
+    fn new(run_id: impl Into<String>, event: impl Into<String>, is_subagent: bool) -> Self {
+        Self {
+            run_id: run_id.into(),
+            event: event.into(),
+            is_subagent,
+        }
+    }
+
+    fn is_root_user_prompt(&self) -> bool {
+        self.event == "UserPromptSubmit" && !self.is_subagent
+    }
+
+    fn is_root_stop(&self) -> bool {
+        self.event == "Stop" && !self.is_subagent
     }
 }
 
@@ -242,15 +291,44 @@ mod tests {
     fn assert_apply(
         pane: &mut CodexPaneStatus,
         run_id: &str,
+        event: &str,
         requested: AgentStatus,
         expected: AgentStatus,
     ) {
-        assert_eq!(pane.apply(run_id, requested), expected);
+        assert_eq!(
+            pane.apply(&CodexHookContext::new(run_id, event, false), requested),
+            expected
+        );
+    }
+
+    fn assert_apply_subagent(
+        pane: &mut CodexPaneStatus,
+        run_id: &str,
+        event: &str,
+        requested: AgentStatus,
+        expected: AgentStatus,
+    ) {
+        assert_eq!(
+            pane.apply(&CodexHookContext::new(run_id, event, true), requested),
+            expected
+        );
     }
 
     fn start_parent_and_child(pane: &mut CodexPaneStatus) {
-        assert_apply(pane, "parent", AgentStatus::Working, AgentStatus::Working);
-        assert_apply(pane, "child", AgentStatus::Working, AgentStatus::Working);
+        assert_apply(
+            pane,
+            "parent",
+            "UserPromptSubmit",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply_subagent(
+            pane,
+            "child",
+            "SubagentStart",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
     }
 
     #[test]
@@ -388,8 +466,20 @@ mod tests {
     fn aggregate_keeps_parent_working_after_child_done() {
         let mut pane = CodexPaneStatus::default();
         start_parent_and_child(&mut pane);
-        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
-        assert_apply(&mut pane, "parent", AgentStatus::Done, AgentStatus::Done);
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStop",
+            AgentStatus::Done,
+            AgentStatus::Working,
+        );
+        assert_apply(
+            &mut pane,
+            "parent",
+            "Stop",
+            AgentStatus::Done,
+            AgentStatus::Done,
+        );
         assert!(pane.is_empty());
     }
 
@@ -399,24 +489,44 @@ mod tests {
         assert_apply(
             &mut pane,
             "parent",
+            "UserPromptSubmit",
             AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStart",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStop",
+            AgentStatus::Done,
             AgentStatus::Working,
         );
         assert_apply(
             &mut pane,
-            "child",
-            AgentStatus::Working,
-            AgentStatus::Working,
+            "parent",
+            "Stop",
+            AgentStatus::Done,
+            AgentStatus::Done,
         );
-        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
-        assert_apply(&mut pane, "parent", AgentStatus::Done, AgentStatus::Done);
         assert!(pane.is_empty());
     }
 
     #[test]
     fn done_unknown_run_on_empty_set_renders_done() {
         let mut pane = CodexPaneStatus::default();
-        assert_eq!(pane.apply("unknown", AgentStatus::Done), AgentStatus::Done);
+        assert_eq!(
+            pane.apply(
+                &CodexHookContext::new("unknown", "SubagentStop", true),
+                AgentStatus::Done
+            ),
+            AgentStatus::Done
+        );
         assert!(pane.is_empty());
     }
 
@@ -424,8 +534,20 @@ mod tests {
     fn double_done_does_not_remove_other_runs() {
         let mut pane = CodexPaneStatus::default();
         start_parent_and_child(&mut pane);
-        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
-        assert_apply(&mut pane, "child", AgentStatus::Done, AgentStatus::Working);
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStop",
+            AgentStatus::Done,
+            AgentStatus::Working,
+        );
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStop",
+            AgentStatus::Done,
+            AgentStatus::Working,
+        );
         assert!(!pane.is_empty());
     }
 
@@ -433,10 +555,76 @@ mod tests {
     fn scoped_waiting_renders_working() {
         let mut pane = CodexPaneStatus::default();
         assert_eq!(
-            pane.apply("run", AgentStatus::Waiting),
+            pane.apply(
+                &CodexHookContext::new("run", "PostToolUse", false),
+                AgentStatus::Waiting
+            ),
             AgentStatus::Working
         );
         assert!(!pane.is_empty());
+    }
+
+    #[test]
+    fn root_stop_clears_stale_active_runs() {
+        let mut pane = CodexPaneStatus::default();
+        assert_apply(
+            &mut pane,
+            "stale",
+            "PostToolUse",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply(
+            &mut pane,
+            "current",
+            "PostToolUse",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply(
+            &mut pane,
+            "current",
+            "Stop",
+            AgentStatus::Done,
+            AgentStatus::Done,
+        );
+        assert!(pane.is_empty());
+    }
+
+    #[test]
+    fn root_user_prompt_resets_stale_active_runs() {
+        let mut pane = CodexPaneStatus::default();
+        assert_apply(
+            &mut pane,
+            "stale",
+            "PostToolUse",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+        assert_apply(
+            &mut pane,
+            "current",
+            "UserPromptSubmit",
+            AgentStatus::Working,
+            AgentStatus::Working,
+        );
+
+        assert_eq!(pane.active.len(), 1);
+        assert!(pane.active.contains("current"));
+    }
+
+    #[test]
+    fn subagent_stop_does_not_clear_parent_run() {
+        let mut pane = CodexPaneStatus::default();
+        start_parent_and_child(&mut pane);
+        assert_apply_subagent(
+            &mut pane,
+            "child",
+            "SubagentStop",
+            AgentStatus::Done,
+            AgentStatus::Working,
+        );
+        assert!(pane.active.contains("parent"));
     }
 
     #[test]
@@ -445,12 +633,23 @@ mod tests {
         let key = test_pane_key();
         let path = status_path(&store.codex_status_runtime_dir(), &key);
 
-        let rendered =
-            apply_status_with_store(&store, &key, "parent", AgentStatus::Working).unwrap();
+        let rendered = apply_status_with_store(
+            &store,
+            &key,
+            &CodexHookContext::new("parent", "UserPromptSubmit", false),
+            AgentStatus::Working,
+        )
+        .unwrap();
         assert_eq!(rendered, AgentStatus::Working);
         assert!(path.exists());
 
-        let rendered = apply_status_with_store(&store, &key, "parent", AgentStatus::Done).unwrap();
+        let rendered = apply_status_with_store(
+            &store,
+            &key,
+            &CodexHookContext::new("parent", "Stop", false),
+            AgentStatus::Done,
+        )
+        .unwrap();
         assert_eq!(rendered, AgentStatus::Done);
         assert!(!path.exists());
     }
@@ -464,7 +663,13 @@ mod tests {
         let path = status_path(&dir, &key);
         fs::write(&path, "not json").unwrap();
 
-        let rendered = apply_status_with_store(&store, &key, "run", AgentStatus::Done).unwrap();
+        let rendered = apply_status_with_store(
+            &store,
+            &key,
+            &CodexHookContext::new("run", "Stop", false),
+            AgentStatus::Done,
+        )
+        .unwrap();
 
         assert_eq!(rendered, AgentStatus::Done);
         assert!(!path.exists());
