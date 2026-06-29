@@ -22,6 +22,13 @@ description: Release notes and version history for workmux
 
 # Changelog
 
+## v0.1.217 (2026-06-29)
+
+- Keep the sidebar spinner moving while panes are active. ([#180](https://github.com/raine/workmux/issues/180))
+- Respect configured sidebar width and height instead of replacing them with synced resize values. ([#172](https://github.com/raine/workmux/pull/172))
+- Install the Pi agent sandbox from the current package name. ([#179](https://github.com/raine/workmux/pull/179))
+- Recover automatically when a tmux resize leaves the sidebar excessively wide.
+
 ## v0.1.216 (2026-06-28)
 
 - Fix Codex status tracking when hooks run without tmux environment details, so Codex agents appear in `workmux list` and the sidebar. ([#187](https://github.com/raine/workmux/issues/187))
